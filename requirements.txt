@@ -1,0 +1,36 @@
+# Core
+python-dotenv>=1.0.0
+
+# Scraping
+praw>=7.7.0
+google-api-python-client>=2.100.0
+crawl4ai>=0.3.0
+playwright>=1.40.0
+
+# NLP
+spacy>=3.7.0
+transformers>=4.36.0
+torch>=2.1.0
+
+# Clustering & matching
+scikit-learn>=1.3.0
+rapidfuzz>=3.5.0
+
+# Database
+# (SQLite is built into Python)
+
+# Dashboard
+streamlit>=1.29.0
+plotly>=5.18.0
+
+# Utilities
+pandas>=2.1.0
+requests>=2.31.0
+
+# Testing
+pytest>=7.4.0
+
+# Optional — uncomment if using
+# ollama>=0.1.0
+# qdrant-client>=1.7.0
+# google-lens-python>=1.0.0
