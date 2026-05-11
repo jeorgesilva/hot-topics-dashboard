@@ -39,3 +39,6 @@ CLAUDE.local.md
 
 # n8n
 n8n-data/
+
+.DS_Store
+**/.DS_Store
