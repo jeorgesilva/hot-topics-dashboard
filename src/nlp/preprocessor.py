@@ -28,9 +28,10 @@ class CleanedItem(RawItem):
 
 
 def _get_nlp() -> spacy.language.Language:
+    """Load and cache the spaCy model."""
     global _nlp
     if _nlp is None:
-        _nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+        _nlp = spacy.load("en_core_web_md", disable=["parser", "ner"])
     return _nlp
 
 
