@@ -4,9 +4,8 @@ These TypedDicts define the interface contract between the scraper layer
 (Person B) and the NLP layer (Person A). See GitHub Issue #1 for the
 full specification.
 
-NOTE: Person A's preprocessor.py also defines RawItem / CleanedItem.
-Both modules must stay in sync. If you change fields here, update
-src/nlp/preprocessor.py to match.
+NOTE: src/nlp/preprocessor.py should import RawItem from here rather than
+defining its own copy. CleanedItem can extend RawItem directly.
 """
 
 from __future__ import annotations
