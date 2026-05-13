@@ -26,4 +26,4 @@ class RawItem(TypedDict):
     url: str  # original URL
     platform: str  # "reddit" | "youtube" | "google_news" | "newsapi"
     timestamp: str  # ISO 8601 — e.g. "2026-05-11T10:00:00Z"
-    engagement: dict  # platform-specific: {"score": int, "comments": int}
+    engagement: dict[str, int]  # platform-specific: {"score": int, "comments": int}
