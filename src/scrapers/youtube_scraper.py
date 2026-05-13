@@ -12,8 +12,6 @@ Run directly:
 
 from __future__ import annotations
 
-import csv
-import json
 import logging
 import os
 from pathlib import Path
@@ -21,6 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
 
+from src.utils.csv_helpers import update_csv
 from src.utils.models import RawItem
 
 load_dotenv()
@@ -114,54 +113,11 @@ def scrape_youtube(
     return items
 
 
-_CSV_FIELDNAMES = [
-    "id", "title", "description", "source",
-    "url", "platform", "timestamp", "engagement",
-]
-
-
-def _update_csv(items: list[RawItem], path: Path) -> int:
-    """Append new items to a CSV file, skipping rows whose id already exists.
-
-    Creates the file (with a header row) on first run. On subsequent runs only
-    rows with an id not yet present in the file are appended.
-
-    Args:
-        items: Items to persist.
-        path:  Destination CSV path. Parent directories are created if needed.
-
-    Returns:
-        Number of rows actually written.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    existing_ids: set[str] = set()
-    is_new_file = not path.exists()
-
-    if not is_new_file:
-        with path.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                existing_ids.add(row["id"])
-
-    new_items = [item for item in items if item["id"] not in existing_ids]
-    if not new_items:
-        return 0
-
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDNAMES)
-        if is_new_file:
-            writer.writeheader()
-        for item in new_items:
-            writer.writerow({**item, "engagement": json.dumps(item["engagement"])})
-
-    return len(new_items)
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     results = scrape_youtube(limit=50)
     csv_path = Path("data/raw/youtube_DE.csv")
-    written = _update_csv(results, csv_path)
+    written = update_csv(results, csv_path)
     for r in results[:3]:
         print(f"[{r['source']}] {r['title'][:80]}  (views={r['engagement']['score']})")
     print(f"... {len(results)} fetched, {written} new rows written to {csv_path}")

@@ -10,17 +10,15 @@ Engagement data is unavailable — fields default to {"score": 0, "comments": 0}
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import json
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
 
+from src.utils.csv_helpers import extract_domain, normalize_url, update_csv
 from src.utils.models import RawItem
 
 logger = logging.getLogger(__name__)
@@ -62,22 +60,8 @@ def _build_rss_url(geo: str) -> str:
 
 
 def _url_to_id(url: str) -> str:
-    """Generate a deterministic ID from a URL."""
-    return "gtrends_" + hashlib.sha256(url.encode()).hexdigest()[:12]
-
-
-def _extract_domain(url: str) -> str:
-    """Extract a clean domain name from a URL.
-
-    Examples:
-        "https://www.bbc.com/news/article" -> "bbc.com"
-        "https://edition.cnn.com/story"    -> "edition.cnn.com"
-    """
-    parsed = urlparse(url)
-    domain = parsed.netloc
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
+    """Generate a deterministic ID from a URL, ignoring query parameters."""
+    return "gtrends_" + hashlib.sha256(normalize_url(url).encode()).hexdigest()[:12]
 
 
 def _parse_rss_timestamp(raw_date: str) -> str:
@@ -140,7 +124,7 @@ def _parse_rss(xml_text: str) -> list[RawItem]:
         if source_elem is not None and source_elem.text:
             source_name = source_elem.text.strip()
         else:
-            source_name = _extract_domain(url)
+            source_name = extract_domain(url)
 
         item: RawItem = {
             "id": _url_to_id(url),
@@ -155,50 +139,6 @@ def _parse_rss(xml_text: str) -> list[RawItem]:
         items.append(item)
 
     return items
-
-
-_CSV_FIELDNAMES = [
-    "id", "title", "description", "source",
-    "url", "platform", "timestamp", "engagement",
-]
-
-
-def _update_csv(items: list[RawItem], path: Path) -> int:
-    """Append new items to a CSV file, skipping rows whose id already exists.
-
-    Creates the file (with a header row) on first run. On subsequent runs only
-    rows with an id not yet present in the file are appended, so the file grows
-    incrementally without duplicates.
-
-    Args:
-        items: Items to persist.
-        path:  Destination CSV path. Parent directories are created if needed.
-
-    Returns:
-        Number of rows actually written.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    existing_ids: set[str] = set()
-    is_new_file = not path.exists()
-
-    if not is_new_file:
-        with path.open(newline="", encoding="utf-8") as fh:
-            for row in csv.DictReader(fh):
-                existing_ids.add(row["id"])
-
-    new_items = [item for item in items if item["id"] not in existing_ids]
-    if not new_items:
-        return 0
-
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDNAMES)
-        if is_new_file:
-            writer.writeheader()
-        for item in new_items:
-            writer.writerow({**item, "engagement": json.dumps(item["engagement"])})
-
-    return len(new_items)
 
 
 def scrape_google_trends(
@@ -242,7 +182,7 @@ if __name__ == "__main__":
     GEO = "DE"
     results = scrape_google_trends(geo=GEO)
     csv_path = Path("data/raw") / f"google_news_{GEO.lower()}.csv"
-    written = _update_csv(results, csv_path)
+    written = update_csv(results, csv_path)
     for r in results[:5]:
         print(f"[{r['source']}] {r['title'][:80]}")
     print(f"... {len(results)} fetched, {written} new rows written to {csv_path}")
