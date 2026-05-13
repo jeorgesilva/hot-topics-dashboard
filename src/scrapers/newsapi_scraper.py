@@ -15,17 +15,16 @@ Run directly:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pandas as pd
 import requests
 import trafilatura
 from dotenv import load_dotenv
 
+from src.utils.csv_helpers import BASE_FIELDNAMES, extract_domain, normalize_url, update_csv
 from src.utils.models import RawItem
 
 load_dotenv()
@@ -48,24 +47,12 @@ _USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
-_CSV_COLUMNS = [
-    "id", "title", "description", "source",
-    "url", "platform", "timestamp", "engagement", "text",
-]
+_CSV_COLUMNS = BASE_FIELDNAMES + ["text"]
 
 
 def _url_to_id(url: str) -> str:
-    """Generate a deterministic ID from a URL."""
-    return "newsapi_" + hashlib.sha256(url.encode()).hexdigest()[:12]
-
-
-def _extract_domain(url: str) -> str:
-    """Extract a clean domain name from a URL."""
-    parsed = urlparse(url)
-    domain = parsed.netloc
-    if domain.startswith("www."):
-        domain = domain[4:]
-    return domain
+    """Generate a deterministic ID from a URL, ignoring query parameters."""
+    return "newsapi_" + hashlib.sha256(normalize_url(url).encode()).hexdigest()[:12]
 
 
 def scrape_newsapi(
@@ -126,7 +113,7 @@ def scrape_newsapi(
         seen_urls.add(url)
 
         source_name = (
-            (article.get("source") or {}).get("name") or _extract_domain(url)
+            (article.get("source") or {}).get("name") or extract_domain(url)
         )
 
         item: RawItem = {
@@ -211,35 +198,20 @@ def fetch_full_text(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _update_csv(items: list[RawItem], path: Path) -> pd.DataFrame:
-    """Merge new items with an existing CSV, deduplicating by URL.
+def _update_csv(items: list[RawItem], path: Path) -> int:
+    """Append new items to the NewsAPI CSV, skipping IDs that already exist.
 
-    Existing rows are placed first so already-extracted text is preserved when
-    the same URL appears in both old and new results.
+    Rows start with text=None; fetch_full_text() fills them in a separate pass.
+    Existing rows (same ID) are skipped, preserving any text already extracted.
 
     Args:
-        items: Freshly scraped items to merge in.
-        path:  Destination CSV path. Parent directories are created if needed.
+        items: Freshly scraped items.
+        path: Destination CSV path.
 
     Returns:
-        Combined DataFrame (existing + new, deduped) ready for text extraction.
+        Number of rows actually written.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    new_df = pd.DataFrame([
-        {**item, "engagement": json.dumps(item["engagement"]), "text": None}
-        for item in items
-    ])
-
-    if path.exists():
-        existing_df = pd.read_csv(path)
-        # Existing rows first → keep="first" preserves their text values
-        combined = pd.concat([existing_df, new_df], ignore_index=True)
-        combined = combined.drop_duplicates(subset=["url"], keep="first")
-    else:
-        combined = new_df
-
-    return combined[_CSV_COLUMNS] if set(_CSV_COLUMNS).issubset(combined.columns) else combined
+    return update_csv(items, path, fieldnames=_CSV_COLUMNS, extra_defaults={"text": None})
 
 
 if __name__ == "__main__":
@@ -252,16 +224,19 @@ if __name__ == "__main__":
         print("No articles found.")
     else:
         csv_path = Path("data/raw/newsapi_de.csv")
-        df = _update_csv(results, csv_path)
-        new_count = len(df) - (len(pd.read_csv(csv_path)) if csv_path.exists() else 0)
+        written = _update_csv(results, csv_path)
 
         for r in results[:5]:
             print(f"[{r['source']}] {r['title'][:80]}")
 
-        print(f"\n=== EXTRACTING ARTICLE TEXT ({len(df)} total) ===")
+        print(f"\n=== EXTRACTING ARTICLE TEXT ===")
+        df = pd.read_csv(csv_path)
         df = fetch_full_text(df)
-
         df.to_csv(csv_path, index=False)
+
+        total = len(df)
+        with_text = df["text"].notna().sum()
         print(f"\nCSV saved: {csv_path}")
-        print(f"Total articles: {len(df)}")
-        print(f"With text:      {df['text'].notna().sum()}")
+        print(f"Total articles: {total}")
+        print(f"New this run:   {written}")
+        print(f"With text:      {with_text}")

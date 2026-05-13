@@ -268,22 +268,22 @@ class TestFetchFullText:
 
 
 class TestUpdateCsv:
-    """Verify _update_csv() merges and deduplicates correctly."""
+    """Verify _update_csv() appends and deduplicates correctly."""
 
-    def test_creates_new_dataframe_when_no_csv(self, tmp_path):
-        from src.scrapers.newsapi_scraper import _update_csv, scrape_newsapi
+    def test_creates_csv_and_returns_count(self, tmp_path):
+        from src.scrapers.newsapi_scraper import _update_csv
         items = [
             {"id": "newsapi_abc", "title": "T", "description": None, "source": "S",
              "url": "https://example.com/1", "platform": "newsapi",
              "timestamp": "2026-05-13T10:00:00Z", "engagement": {"score": 0, "comments": 0}},
         ]
         path = tmp_path / "test.csv"
-        df = _update_csv(items, path)
+        written = _update_csv(items, path)
 
-        assert len(df) == 1
-        assert df.at[0, "url"] == "https://example.com/1"
+        assert written == 1
+        assert path.exists()
 
-    def test_deduplicates_by_url(self, tmp_path):
+    def test_deduplicates_by_id(self, tmp_path):
         from src.scrapers.newsapi_scraper import _update_csv
         item = {
             "id": "newsapi_abc", "title": "T", "description": None, "source": "S",
@@ -292,13 +292,13 @@ class TestUpdateCsv:
         }
         path = tmp_path / "test.csv"
 
-        df1 = _update_csv([item], path)
-        df1.to_csv(path, index=False)
+        _update_csv([item], path)
+        written_again = _update_csv([item], path)
 
-        df2 = _update_csv([item], path)
-        assert len(df2) == 1
+        assert written_again == 0
 
     def test_preserves_existing_text(self, tmp_path):
+        import pandas as pd
         from src.scrapers.newsapi_scraper import _update_csv
         item = {
             "id": "newsapi_abc", "title": "T", "description": None, "source": "S",
@@ -307,11 +307,15 @@ class TestUpdateCsv:
         }
         path = tmp_path / "test.csv"
 
-        # First run — save with extracted text
-        df = _update_csv([item], path)
-        df["text"] = "Extracted body text."
+        # First run — write item, then simulate text extraction by editing the file
+        _update_csv([item], path)
+        df = pd.read_csv(path)
+        df["text"] = df["text"].astype(object)  # all-NaN col is float64 by default
+        df.at[0, "text"] = "Extracted body text."
         df.to_csv(path, index=False)
 
-        # Second run — same URL should keep existing text
-        df2 = _update_csv([item], path)
+        # Second run — same ID is skipped, so the row with text is untouched
+        written = _update_csv([item], path)
+        assert written == 0
+        df2 = pd.read_csv(path)
         assert df2.at[0, "text"] == "Extracted body text."
