@@ -7,6 +7,9 @@ extraction is skipped for rows that already have text.
 
 Free tier: 100 requests/day, up to 100 articles per request, 1-month history.
 Get a key at https://newsapi.org/register
+
+Run directly:
+    python -m src.scrapers.newsapi_scraper
 """
 
 from __future__ import annotations
@@ -15,22 +18,15 @@ import hashlib
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Allow running directly (python src/scrapers/newsapi_scraper.py) in addition
-# to the normal module invocation (python -m src.scrapers.newsapi_scraper).
-_project_root = str(Path(__file__).resolve().parents[2])
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+import pandas as pd
+import requests
+import trafilatura
+from dotenv import load_dotenv
 
-import pandas as pd  # noqa: E402
-import requests  # noqa: E402
-import trafilatura  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
-
-from src.utils.models import RawItem  # noqa: E402
+from src.utils.models import RawItem
 
 load_dotenv()
 

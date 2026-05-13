@@ -5,6 +5,9 @@ and returns them as list[RawItem].
 
 Free tier: 10,000 units/day. A videos.list call costs ~1 unit per item.
 Enable the API at https://console.cloud.google.com/apis
+
+Run directly:
+    python -m src.scrapers.youtube_scraper
 """
 
 from __future__ import annotations
@@ -13,19 +16,12 @@ import csv
 import json
 import logging
 import os
-import sys
 from pathlib import Path
 
-# Allow running directly (python src/scrapers/youtube_scraper.py) in addition
-# to the normal module invocation (python -m src.scrapers.youtube_scraper).
-_project_root = str(Path(__file__).resolve().parents[2])
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+from dotenv import load_dotenv
+from googleapiclient.discovery import build
 
-from dotenv import load_dotenv  # noqa: E402
-from googleapiclient.discovery import build  # noqa: E402
-
-from src.utils.models import RawItem  # noqa: E402
+from src.utils.models import RawItem
 
 load_dotenv()
 
