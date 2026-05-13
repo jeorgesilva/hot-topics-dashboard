@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import time
 from pathlib import Path
@@ -54,7 +55,6 @@ def _import_scraper(source: str):
         return None, None
 
     try:
-        import importlib
         mod = importlib.import_module(info["module"])
         func = getattr(mod, info["function"])
         return func, info["kwargs_key"]
