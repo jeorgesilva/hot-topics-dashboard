@@ -4,7 +4,7 @@ Real-time dashboard that monitors trending political and cyber-related topics ac
 
 ## How it works
 
-1. **Scrape** — Collects trending content from Reddit, YouTube, and DuckDuckGo news
+1. **Scrape** — Collects trending content from Reddit, YouTube, Google News RSS, and NewsAPI
 2. **Cluster** — Groups related articles into unified topics using TF-IDF + agglomerative clustering
 3. **Score** — Evaluates each topic for misinformation risk (sentiment, source credibility, cross-references, linguistic markers)
 4. **Display** — Streamlit dashboard with interactive charts, risk alerts, and transparent score breakdowns
@@ -37,7 +37,7 @@ streamlit run src/dashboard/app.py
 misinfo-dashboard/
 ├── .claude/CLAUDE.md       # Claude Code project instructions
 ├── src/
-│   ├── scrapers/           # Reddit, YouTube, DuckDuckGo scrapers
+│   ├── scrapers/           # Reddit, YouTube, Google News, NewsAPI scrapers
 │   ├── nlp/                # spaCy preprocessing, sentiment, NER, Ollama
 │   ├── scoring/            # Source trust DB, cross-ref, composite risk score
 │   ├── dashboard/          # Streamlit app + Plotly charts
