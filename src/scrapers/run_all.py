@@ -31,7 +31,7 @@ SCRAPER_REGISTRY = {
         "kwargs_key": "limit",
     },
     "google_news": {
-        "module": "src.scrapers.google_trends_scraper",
+        "module": "src.scrapers.google_rss_scraper",
         "function": "scrape_google_trends",
         "kwargs_key": "max_items",
     },

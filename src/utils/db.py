@@ -82,6 +82,25 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_raw_items_cluster
         ON raw_items(cluster_id)
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topics (
+            id          INTEGER PRIMARY KEY,
+            label       TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topic_sources (
+            topic_id    INTEGER NOT NULL REFERENCES topics(id),
+            item_id     TEXT    NOT NULL REFERENCES raw_items(id),
+            PRIMARY KEY (topic_id, item_id)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_topic_sources_topic
+        ON topic_sources(topic_id)
+    """)
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
     return conn
