@@ -31,7 +31,7 @@ class TestRunPipeline:
 
     @patch("src.scrapers.reddit_scraper.scrape_reddit")
     @patch("src.scrapers.youtube_scraper.scrape_youtube")
-    @patch("src.scrapers.google_trends_scraper.scrape_google_trends")
+    @patch("src.scrapers.google_rss_scraper.scrape_google_trends")
     def test_runs_all_sources(self, mock_gn, mock_yt, mock_reddit, tmp_path):
         mock_reddit.return_value = [_make_item("r1")]
         mock_yt.return_value = [_make_item("y1", "youtube")]
@@ -48,7 +48,7 @@ class TestRunPipeline:
 
     @patch("src.scrapers.reddit_scraper.scrape_reddit")
     @patch("src.scrapers.youtube_scraper.scrape_youtube")
-    @patch("src.scrapers.google_trends_scraper.scrape_google_trends")
+    @patch("src.scrapers.google_rss_scraper.scrape_google_trends")
     def test_deduplicates_across_sources(self, mock_gn, mock_yt, mock_reddit, tmp_path):
         # Same ID from two sources (unlikely but possible)
         mock_reddit.return_value = [_make_item("same_id")]
@@ -62,7 +62,7 @@ class TestRunPipeline:
 
     @patch("src.scrapers.reddit_scraper.scrape_reddit")
     @patch("src.scrapers.youtube_scraper.scrape_youtube")
-    @patch("src.scrapers.google_trends_scraper.scrape_google_trends")
+    @patch("src.scrapers.google_rss_scraper.scrape_google_trends")
     def test_continues_if_one_source_fails(self, mock_gn, mock_yt, mock_reddit, tmp_path):
         mock_reddit.side_effect = Exception("Reddit is down")
         mock_yt.return_value = [_make_item("y1", "youtube")]
