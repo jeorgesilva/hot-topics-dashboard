@@ -25,20 +25,26 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
 
     seen: set[str] = set()
     terms: list[str] = []
+    word_count = 0
 
     def _add(term: str) -> None:
+        nonlocal word_count
         normalised = term.lower().strip()
-        if len(normalised) > 1 and normalised not in seen:
+        new_words = len(term.split())
+        if len(normalised) > 1 and normalised not in seen and word_count + new_words <= max_terms:
             seen.add(normalised)
             terms.append(term.strip())
+            word_count += new_words
 
     _PRIORITY_BUCKETS = ("persons", "organizations", "locations")
     for item in items:
         for bucket in _PRIORITY_BUCKETS:
             for entity in item["entities"][bucket]:
+                if word_count >= max_terms:
+                    break
                 _add(entity)
 
-    if len(terms) < max_terms:
+    if word_count < max_terms:
         try:
             keyword_lists = extract_keywords(items, top_n=max_terms)
         except ValueError as exc:
@@ -49,9 +55,9 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
         for kw_list in keyword_lists:
             for kw in kw_list:
                 _add(kw)
-                if len(terms) >= max_terms:
+                if word_count >= max_terms:
                     break
-            if len(terms) >= max_terms:
+            if word_count >= max_terms:
                 break
 
-    return " ".join(" ".join(terms).split()[:max_terms])
+    return " ".join(terms)
