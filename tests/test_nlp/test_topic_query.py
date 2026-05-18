@@ -1,6 +1,4 @@
 """Tests for src/nlp/topic_query.py"""
-import pytest
-
 from src.nlp.ner import annotate
 from src.nlp.preprocessor import RawItem, preprocess
 from src.nlp.topic_query import build_topic_query
