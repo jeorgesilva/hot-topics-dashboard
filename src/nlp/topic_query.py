@@ -4,6 +4,8 @@ from __future__ import annotations
 from src.nlp.keywords import extract_keywords
 from src.nlp.ner import AnnotatedItem
 
+_PRIORITY_BUCKETS = ("persons", "organizations", "locations")
+
 
 def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
     """Produce a NewsAPI search query from a cluster of annotated RSS items.
@@ -36,7 +38,6 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
             terms.append(term.strip())
             word_count += new_words
 
-    _PRIORITY_BUCKETS = ("persons", "organizations", "locations")
     for item in items:
         for bucket in _PRIORITY_BUCKETS:
             for entity in item["entities"][bucket]:
