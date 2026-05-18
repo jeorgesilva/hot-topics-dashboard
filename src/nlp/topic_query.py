@@ -32,9 +32,10 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
             seen.add(normalised)
             terms.append(term.strip())
 
+    _PRIORITY_BUCKETS = ("persons", "organizations", "locations")
     for item in items:
-        for entity_list in item["entities"].values():
-            for entity in entity_list:
+        for bucket in _PRIORITY_BUCKETS:
+            for entity in item["entities"][bucket]:
                 _add(entity)
 
     if len(terms) < max_terms:
