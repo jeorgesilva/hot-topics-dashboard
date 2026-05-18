@@ -1,10 +1,13 @@
 """Tests for src/utils/clustering.py.
 
 Covers title cleaning, fuzzy merging, DB rebuild, and the full cluster_items
-pipeline. All tests use an in-memory SQLite DB — no external services touched.
+pipeline. All tests use a file-backed SQLite DB under pytest's tmp_path —
+no external services are touched.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 import pytest
 
@@ -64,7 +67,6 @@ class TestCleanTitle:
 
 class TestFuzzyMerge:
     def test_merges_near_duplicate_singletons(self):
-        # Two very similar titles that should merge
         labels = [0, 1]
         cleaned = ["covid vaccine update", "covid vaccines update"]
         result = _fuzzy_merge(labels, cleaned, threshold=75)
@@ -77,7 +79,6 @@ class TestFuzzyMerge:
         assert result[0] != result[1]
 
     def test_singleton_merges_into_larger_cluster(self):
-        # labels: 0,0,0 form a cluster; 1 is singleton similar to them
         labels = [0, 0, 0, 1]
         cleaned = [
             "bitcoin price rise",
@@ -86,15 +87,14 @@ class TestFuzzyMerge:
             "bitcoin price rising",
         ]
         result = _fuzzy_merge(labels, cleaned, threshold=75)
-        # The singleton at index 3 should join cluster 0
         assert result[3] == 0
 
     def test_no_change_when_no_singletons(self):
-        labels = [0, 0, 1, 1]
+        original = [0, 0, 1, 1]
         cleaned = ["a b c", "a b d", "x y z", "x y w"]
-        result = _fuzzy_merge(labels[:], cleaned, threshold=75)
-        # No singletons — labels unchanged
-        assert Counter(result) == Counter(labels)
+        result = _fuzzy_merge(original[:], cleaned, threshold=75)
+        # Exact label assignments must be unchanged, not just the multiset
+        assert result == original
 
     def test_returns_list(self):
         result = _fuzzy_merge([0, 1], ["foo bar", "baz qux"], threshold=75)
@@ -110,6 +110,32 @@ class TestClusterItems:
         n = cluster_items(db_conn)
         assert n == 0
 
+    def test_empty_db_clears_stale_topics(self, db_conn):
+        insert_items(db_conn, [_make_item("r_1", "Some headline")])
+        cluster_items(db_conn)
+
+        db_conn.execute("DELETE FROM topic_sources")
+        db_conn.execute("DELETE FROM topics")
+        db_conn.execute("DELETE FROM raw_items")
+        db_conn.commit()
+        n = cluster_items(db_conn)
+
+        assert n == 0
+        assert db_conn.execute("SELECT COUNT(*) FROM topics").fetchone()[0] == 0
+        assert db_conn.execute("SELECT COUNT(*) FROM topic_sources").fetchone()[0] == 0
+
+    def test_empty_title_gets_singleton_cluster(self, db_conn):
+        items = [
+            _make_item("r_1", ""),
+            _make_item("r_2", "Normal headline about recent events"),
+        ]
+        insert_items(db_conn, items)
+        n = cluster_items(db_conn)
+
+        assert n >= 1
+        rows = db_conn.execute("SELECT cluster_id FROM raw_items").fetchall()
+        assert all(r["cluster_id"] is not None for r in rows)
+
     def test_single_item_creates_one_topic(self, db_conn):
         insert_items(db_conn, [_make_item("r_1", "Breaking news headline")])
         n = cluster_items(db_conn)
@@ -123,7 +149,6 @@ class TestClusterItems:
         ]
         insert_items(db_conn, items)
         n = cluster_items(db_conn, distance_threshold=0.35)
-        # All three should land in a single cluster
         assert n == 1
 
     def test_dissimilar_titles_produce_multiple_topics(self, db_conn):
@@ -183,7 +208,7 @@ class TestClusterItems:
             "SELECT COUNT(*) FROM topic_sources"
         ).fetchone()[0]
         assert topic_count >= 1
-        assert source_count == 2  # both items covered
+        assert source_count == 2
 
     def test_topics_and_raw_items_cluster_ids_consistent(self, db_conn):
         items = [_make_item(f"r_{i}", f"Unique story number {i}") for i in range(5)]
@@ -199,7 +224,3 @@ class TestClusterItems:
             for r in db_conn.execute("SELECT cluster_id FROM raw_items").fetchall()
         }
         assert raw_cluster_ids == topic_ids
-
-
-# Needed for test_no_change_when_no_singletons
-from collections import Counter
