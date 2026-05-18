@@ -36,14 +36,16 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Create the database and raw_items table if they don't exist.
+    """Create the database tables if they don't exist.
 
-    The schema matches Issue #1 exactly. NLP-derived columns are nullable
-    so Person B's scrapers can write rows before Person A's pipeline runs.
+    Creates `raw_items` plus clustering tables (`topics`, `topic_sources`).
+    NLP-derived columns on `raw_items` are nullable so scrapers can write rows
+    before the NLP pipeline runs.
 
     Args:
         db_path: Path to the .db file.
@@ -81,6 +83,21 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_raw_items_cluster
         ON raw_items(cluster_id)
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topics (
+            id          INTEGER PRIMARY KEY,
+            label       TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            item_count  INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topic_sources (
+            topic_id    INTEGER NOT NULL REFERENCES topics(id),
+            item_id     TEXT    NOT NULL REFERENCES raw_items(id),
+            PRIMARY KEY (topic_id, item_id)
+        )
     """)
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
