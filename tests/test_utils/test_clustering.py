@@ -7,8 +7,6 @@ no external services are touched.
 
 from __future__ import annotations
 
-from collections import Counter
-
 import pytest
 
 from src.utils.clustering import _clean_title, _fuzzy_merge, cluster_items
