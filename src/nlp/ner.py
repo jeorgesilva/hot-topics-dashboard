@@ -62,7 +62,7 @@ def extract_entities(text: str) -> EntityTags:
 def annotate(item: CleanedItem) -> AnnotatedItem:
     """Add NER entity tags to a cleaned item."""
     entities = extract_entities(item["cleaned_text"])
-    return AnnotatedItem(**item, entities=entities)
+    return {**item, "entities": entities}  # type: ignore[return-value]
 
 
 def annotate_batch(items: list[CleanedItem]) -> list[AnnotatedItem]:
