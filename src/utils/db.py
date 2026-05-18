@@ -41,10 +41,11 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Create the database and raw_items table if they don't exist.
+    """Create the database tables if they don't exist.
 
-    The schema matches Issue #1 exactly. NLP-derived columns are nullable
-    so Person B's scrapers can write rows before Person A's pipeline runs.
+    Creates `raw_items` plus clustering tables (`topics`, `topic_sources`).
+    NLP-derived columns on `raw_items` are nullable so scrapers can write rows
+    before the NLP pipeline runs.
 
     Args:
         db_path: Path to the .db file.
