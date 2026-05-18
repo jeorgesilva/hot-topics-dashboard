@@ -39,7 +39,13 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
                 _add(entity)
 
     if len(terms) < max_terms:
-        keyword_lists = extract_keywords(items, top_n=max_terms)
+        try:
+            keyword_lists = extract_keywords(items, top_n=max_terms)
+        except ValueError as exc:
+            if "empty vocabulary" in str(exc).lower():
+                keyword_lists = []
+            else:
+                raise
         for kw_list in keyword_lists:
             for kw in kw_list:
                 _add(kw)
