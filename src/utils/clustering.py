@@ -46,13 +46,13 @@ def _fuzzy_merge(labels: list[int], cleaned: list[str], threshold: int) -> list[
             break
         merged_any = False
         for idx in singletons:
-            best_score = threshold - 1
+            best_score = threshold
             best_label = labels[idx]
             for other_idx, other_cleaned in enumerate(cleaned):
                 if other_idx == idx:
                     continue
                 score = fuzz.token_sort_ratio(cleaned[idx], other_cleaned)
-                if score > best_score:
+                if score >= best_score:
                     best_score = score
                     best_label = labels[other_idx]
             if best_label != labels[idx]:
