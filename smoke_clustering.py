@@ -132,9 +132,25 @@ def main() -> None:
         for row in rows:
             print(f"  {row['id']:>6}  →  cluster {row['cluster_id']}")
 
+        # ── invariant checks ────────────────────────────────────────
+        source_count = conn.execute(
+            "SELECT COUNT(*) FROM topic_sources"
+        ).fetchone()[0]
+        raw_clustered = conn.execute(
+            "SELECT COUNT(*) FROM raw_items WHERE cluster_id IS NOT NULL"
+        ).fetchone()[0]
+
+        assert n_topics >= 1, f"Expected at least 1 topic, got {n_topics}"
+        assert source_count == len(SAMPLE_ITEMS), (
+            f"topic_sources rows ({source_count}) must equal item count ({len(SAMPLE_ITEMS)})"
+        )
+        assert raw_clustered == len(SAMPLE_ITEMS), (
+            f"All items must have cluster_id set, got {raw_clustered}/{len(SAMPLE_ITEMS)}"
+        )
+
         print()
         hr("═")
-        print("  SMOKE TEST PASSED")
+        print("  SMOKE TEST PASSED  (visual inspection above)")
         hr("═")
         print()
 

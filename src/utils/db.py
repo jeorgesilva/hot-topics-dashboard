@@ -36,6 +36,7 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -96,10 +97,6 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             item_id     TEXT    NOT NULL REFERENCES raw_items(id),
             PRIMARY KEY (topic_id, item_id)
         )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_topic_sources_topic
-        ON topic_sources(topic_id)
     """)
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
