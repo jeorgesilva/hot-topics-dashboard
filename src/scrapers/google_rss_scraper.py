@@ -126,6 +126,12 @@ def _parse_rss(xml_text: str) -> list[RawItem]:
         else:
             source_name = extract_domain(url)
 
+        # Google News appends " - Source Name" to every title; strip it so NER
+        # doesn't pick up publication names as topic entities.
+        suffix = f" - {source_name}"
+        if source_name and title.endswith(suffix):
+            title = title[: -len(suffix)].strip()
+
         item: RawItem = {
             "id": _url_to_id(url),
             "title": title,

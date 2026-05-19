@@ -181,6 +181,40 @@ class TestGoogleNewsScraper:
 
         assert len(items) == 3
 
+    def test_source_suffix_stripped_from_title(self, mock_get):
+        mock_get.return_value = _mock_response(_rss(_item(
+            title="Bayern sichert Bundesliga-Titel - Spiegel Online",
+            source="Spiegel Online",
+        )))
+
+        from src.scrapers.google_rss_scraper import scrape_google_trends
+        items = scrape_google_trends(geo="DE")
+
+        assert items[0]["title"] == "Bayern sichert Bundesliga-Titel"
+        assert items[0]["source"] == "Spiegel Online"
+
+    def test_title_without_suffix_unchanged(self, mock_get):
+        mock_get.return_value = _mock_response(_rss(_item(
+            title="Bayern sichert Bundesliga-Titel",
+            source="Spiegel Online",
+        )))
+
+        from src.scrapers.google_rss_scraper import scrape_google_trends
+        items = scrape_google_trends(geo="DE")
+
+        assert items[0]["title"] == "Bayern sichert Bundesliga-Titel"
+
+    def test_dash_in_headline_not_stripped_when_not_suffix(self, mock_get):
+        mock_get.return_value = _mock_response(_rss(_item(
+            title="Biden - Obama split on policy - Spiegel Online",
+            source="Spiegel Online",
+        )))
+
+        from src.scrapers.google_rss_scraper import scrape_google_trends
+        items = scrape_google_trends(geo="DE")
+
+        assert items[0]["title"] == "Biden - Obama split on policy"
+
 
 class TestBuildRssUrl:
     """Unit tests for _build_rss_url."""

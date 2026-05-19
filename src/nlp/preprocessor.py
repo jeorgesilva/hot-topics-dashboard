@@ -1,6 +1,7 @@
 """Text cleaning and tokenization pipeline using spaCy (Week 1, Step 1)."""
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 from typing import TypedDict
@@ -47,7 +48,8 @@ def normalize_unicode(text: str) -> str:
 
 
 def clean_text(text: str) -> str:
-    """Strip HTML, normalize unicode, and collapse whitespace."""
+    """Decode HTML entities, strip tags, normalize unicode, collapse whitespace."""
+    text = html.unescape(text)
     text = strip_html(text)
     text = normalize_unicode(text)
     text = re.sub(r"\s+", " ", text).strip()
