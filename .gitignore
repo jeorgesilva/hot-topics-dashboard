@@ -16,6 +16,7 @@ env/
 # Data (raw scrapes can be large)
 data/raw/
 data/processed/
+data/smoke_*
 
 # IDE
 .vscode/
@@ -39,6 +40,9 @@ CLAUDE.local.md
 
 # n8n
 n8n-data/
+
+# Smoke test scripts
+smoke_*.py
 
 .DS_Store
 **/.DS_Store
