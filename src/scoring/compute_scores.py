@@ -21,11 +21,10 @@ from __future__ import annotations
 import argparse
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 import sqlite3
 
 from src.scoring.source_trust import score_coverage
-from src.utils.db import get_connection, init_db
+from src.utils.db import init_db
 
 logger = logging.getLogger(__name__)
 
