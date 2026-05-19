@@ -109,3 +109,14 @@ class TestMediaOrgFiltering:
         # After filtering "Reuters" and "Associated Press" (contains "press"),
         # keywords from the title/description should fill the query.
         assert isinstance(result, str)
+
+    def test_broadcast_abbreviation_excluded(self):
+        # "CNN" and "ABC7" have no media-domain words but are known outlets.
+        item = _make_annotated(
+            "Sandy Fire erupts in Simi Valley",
+            description="According to CNN and ABC7 Los Angeles, crews are on site.",
+            source="Los Angeles Times",
+        )
+        result = build_topic_query([item])
+        assert "CNN" not in result
+        assert "ABC7" not in result

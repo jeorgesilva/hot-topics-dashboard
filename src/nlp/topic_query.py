@@ -1,6 +1,8 @@
 """Build NewsAPI search queries from a topic cluster (Week 1, Step 3)."""
 from __future__ import annotations
 
+import re
+
 from src.nlp.keywords import extract_keywords
 from src.nlp.ner import AnnotatedItem
 
@@ -14,6 +16,13 @@ _MEDIA_TOKENS = frozenset({
     "news", "times", "post", "tribune", "daily", "journal", "herald",
     "gazette", "press", "media", "broadcasting", "television", "radio",
     "channel", "network", "magazine", "weekly", "wire",
+})
+
+# Well-known broadcast/wire abbreviations that carry no media-domain word
+# but are unambiguously news outlets in this context.
+_KNOWN_OUTLETS = frozenset({
+    "cnn", "bbc", "fox", "nbc", "abc", "cbs", "pbs", "sky",
+    "msnbc", "cnbc", "npr", "espn", "cspan", "hln", "ap",
 })
 
 
@@ -46,7 +55,11 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
         if any(e == src or e in src or src in e for src in _source_lower):
             return True
         tokens = set(e.split())
-        return bool(tokens & _MEDIA_TOKENS)
+        if tokens & _MEDIA_TOKENS:
+            return True
+        # Strip trailing digits from each token (catches "ABC7", "FOX 5")
+        alpha_tokens = {re.sub(r"\d+$", "", t) for t in tokens} - {""}
+        return bool(alpha_tokens & _KNOWN_OUTLETS)
 
     seen: set[str] = set()
     terms: list[str] = []
@@ -66,7 +79,9 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
             for entity in item["entities"][bucket]:
                 if word_count >= max_terms:
                     break
-                if bucket == "organizations" and _is_media_org(entity):
+                # Apply filter to all buckets — spaCy occasionally mislabels
+                # news channels (e.g. "ABC7 Los Angeles") as PERSON entities.
+                if _is_media_org(entity):
                     continue
                 _add(entity)
 
