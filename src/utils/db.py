@@ -99,6 +99,20 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             PRIMARY KEY (topic_id, item_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS topic_scores (
+            topic_id                INTEGER PRIMARY KEY REFERENCES topics(id),
+            avg_trust               REAL,
+            trust_variance          REAL,
+            coverage_breadth        INTEGER,
+            coverage_ratio          REAL,
+            avg_sentiment_extremity REAL,
+            sensationalism_avg      REAL,
+            framing_inconsistency   REAL,
+            composite_risk          REAL,
+            computed_at             TEXT
+        )
+    """)
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
     return conn
