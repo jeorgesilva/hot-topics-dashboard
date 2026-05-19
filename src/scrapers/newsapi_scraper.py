@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -60,6 +61,7 @@ def scrape_newsapi(
     language: str = DEFAULT_LANGUAGE,
     max_articles: int = 50,
     sort_by: str = "publishedAt",
+    days_back: int = 10,
 ) -> list[RawItem]:
     """Fetch articles from NewsAPI /v2/everything.
 
@@ -69,16 +71,21 @@ def scrape_newsapi(
         language: Two-letter language code (e.g. "de", "en").
         max_articles: Max articles to fetch. Capped at 100 (API limit).
         sort_by: Sort order — "publishedAt", "relevancy", or "popularity".
+        days_back: How many days into the past to search. Defaults to 10.
+            The free tier supports up to 30 days of history.
 
     Returns:
         List of RawItem dicts. Returns an empty list if the request fails.
     """
+    from_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
     params: dict = {
         "apiKey": NEWSAPI_KEY,
         "q": query,
         "language": language,
         "pageSize": min(max_articles, 100),
         "sortBy": sort_by,
+        "from": from_date,
     }
 
     logger.info(
