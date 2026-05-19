@@ -49,6 +49,15 @@ class TestCleanText:
     def test_only_whitespace(self):
         assert clean_text("   ") == ""
 
+    def test_decodes_html_entities(self):
+        # &nbsp; is decoded to \xa0 then collapsed to a regular space by \s+
+        assert clean_text("hello&nbsp;world") == "hello world"
+        assert clean_text("&amp;") == "&"
+        assert clean_text("&lt;b&gt;bold&lt;/b&gt;") == "bold"
+
+    def test_nbsp_does_not_survive_as_literal(self):
+        assert "&nbsp;" not in clean_text("word&nbsp;word")
+
 
 class TestTokenizeAndLemmatize:
     def test_returns_two_lists(self):
