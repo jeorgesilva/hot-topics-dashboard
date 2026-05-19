@@ -5,6 +5,7 @@ All HTTP and trafilatura calls are mocked — no real requests during testing.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch, call
 
 import pandas as pd
@@ -198,6 +199,39 @@ class TestScrapeNewsapi:
         id2 = scrape_newsapi()[0]["id"]
 
         assert id1 == id2
+
+    def test_from_date_defaults_to_10_days_back(self, mock_get):
+        mock_get.return_value = _mock_response(_make_api_response())
+
+        from src.scrapers.newsapi_scraper import scrape_newsapi
+        scrape_newsapi()
+
+        _, kwargs = mock_get.call_args
+        from_date = kwargs["params"]["from"]
+        expected = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        assert from_date == expected
+
+    def test_days_back_param_respected(self, mock_get):
+        mock_get.return_value = _mock_response(_make_api_response())
+
+        from src.scrapers.newsapi_scraper import scrape_newsapi
+        scrape_newsapi(days_back=5)
+
+        _, kwargs = mock_get.call_args
+        from_date = kwargs["params"]["from"]
+        expected = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+        assert from_date == expected
+
+    def test_from_date_sent_as_iso_date_string(self, mock_get):
+        mock_get.return_value = _mock_response(_make_api_response())
+
+        from src.scrapers.newsapi_scraper import scrape_newsapi
+        scrape_newsapi()
+
+        _, kwargs = mock_get.call_args
+        from_date = kwargs["params"]["from"]
+        # Must parse as a valid YYYY-MM-DD date
+        datetime.strptime(from_date, "%Y-%m-%d")
 
 
 class TestFetchFullText:
