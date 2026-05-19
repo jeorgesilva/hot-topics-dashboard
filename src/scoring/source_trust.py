@@ -139,13 +139,11 @@ def compute_coverage_metrics(
 
     scores: list[float] = []
     credible_domains: set[str] = set()
-    all_domains: set[str] = set()
 
     for row in rows:
         domain = _domain_from_url(row["url"]) or row["source"]
         score = get_trust_score(domain, neutral=neutral)
         scores.append(score)
-        all_domains.add(domain)
         if score >= high_trust_threshold:
             credible_domains.add(domain)
 
