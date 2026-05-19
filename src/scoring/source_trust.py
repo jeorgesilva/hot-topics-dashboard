@@ -79,11 +79,22 @@ def get_trust_score(domain: str, neutral: float = NEUTRAL_SCORE) -> float:
 
 def _domain_from_url(url: str) -> str:
     """Extract and normalise the domain from a URL string."""
+    candidate = url.strip()
+    if not candidate:
+        return ""
+
+    host: str | None = None
     try:
-        netloc = urlparse(url).netloc or url
+        parsed = urlparse(candidate if "://" in candidate or candidate.startswith("//") else f"//{candidate}")
+        host = parsed.hostname
     except Exception:
-        netloc = url
-    return netloc.lower().removeprefix("www.")
+        host = None
+
+    if not host:
+        host = candidate.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+        host = host.rsplit("@", 1)[-1].split(":", 1)[0]
+
+    return host.lower().removeprefix("www.")
 
 
 def compute_coverage_metrics(
