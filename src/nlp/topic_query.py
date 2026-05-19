@@ -6,6 +6,16 @@ from src.nlp.ner import AnnotatedItem
 
 _PRIORITY_BUCKETS = ("persons", "organizations", "locations")
 
+# Tokens that strongly indicate a news/media organization. ORG entities whose
+# lowercased text contains any of these words are excluded from the query so
+# that publication names pulled from RSS description snippets don't pollute
+# the NewsAPI search.
+_MEDIA_TOKENS = frozenset({
+    "news", "times", "post", "tribune", "daily", "journal", "herald",
+    "gazette", "press", "media", "broadcasting", "television", "radio",
+    "channel", "network", "magazine", "weekly", "wire",
+})
+
 
 def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
     """Produce a NewsAPI search query from a cluster of annotated RSS items.
@@ -25,6 +35,19 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
     if not items:
         return ""
 
+    # Source names from the cluster (lowercased) are excluded from ORG entities
+    # because RSS description snippets often cite the publishing outlet by name.
+    _source_lower: set[str] = {
+        (item.get("source") or "").lower() for item in items
+    } - {""}
+
+    def _is_media_org(entity: str) -> bool:
+        e = entity.lower()
+        if any(e == src or e in src or src in e for src in _source_lower):
+            return True
+        tokens = set(e.split())
+        return bool(tokens & _MEDIA_TOKENS)
+
     seen: set[str] = set()
     terms: list[str] = []
     word_count = 0
@@ -43,6 +66,8 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
             for entity in item["entities"][bucket]:
                 if word_count >= max_terms:
                     break
+                if bucket == "organizations" and _is_media_org(entity):
+                    continue
                 _add(entity)
 
     if word_count < max_terms:
