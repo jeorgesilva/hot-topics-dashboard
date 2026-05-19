@@ -1,0 +1,59 @@
+domain,trust_score,factual_reporting,bias
+apnews.com,95,VERY HIGH,CENTER
+reuters.com,94,VERY HIGH,CENTER
+bbc.com,86,HIGH,LEFT-CENTER
+pbs.org,88,HIGH,LEFT-CENTER
+npr.org,85,HIGH,LEFT-CENTER
+economist.com,88,HIGH,CENTER
+ft.com,87,HIGH,CENTER
+tagesschau.de,91,VERY HIGH,CENTER
+france24.com,83,HIGH,CENTER
+dw.com,85,HIGH,CENTER
+wsj.com,82,HIGH,RIGHT-CENTER
+theguardian.com,81,HIGH,LEFT-CENTER
+sueddeutsche.de,83,HIGH,LEFT-CENTER
+faz.net,80,HIGH,RIGHT-CENTER
+zeit.de,80,HIGH,LEFT-CENTER
+nytimes.com,78,HIGH,LEFT-CENTER
+washingtonpost.com,76,HIGH,LEFT-CENTER
+axios.com,78,HIGH,CENTER
+politico.com,77,HIGH,LEFT-CENTER
+theatlantic.com,75,HIGH,LEFT-CENTER
+spiegel.de,82,HIGH,LEFT-CENTER
+handelsblatt.com,82,HIGH,CENTER
+cbsnews.com,76,HIGH,LEFT-CENTER
+abcnews.go.com,75,HIGH,LEFT-CENTER
+nbcnews.com,74,HIGH,LEFT-CENTER
+usatoday.com,73,HIGH,LEFT-CENTER
+cnn.com,72,HIGH,LEFT
+thehill.com,72,HIGH,LEFT-CENTER
+vox.com,72,HIGH,LEFT
+businessinsider.com,68,HIGH,LEFT-CENTER
+time.com,75,HIGH,LEFT-CENTER
+msnbc.com,65,HIGH,LEFT
+welt.de,65,HIGH,RIGHT-CENTER
+lefigaro.fr,72,HIGH,RIGHT-CENTER
+elpais.com,80,HIGH,LEFT-CENTER
+lemonde.fr,82,HIGH,LEFT-CENTER
+corriere.it,78,HIGH,CENTER
+thedailybeast.com,60,HIGH,LEFT
+slate.com,68,HIGH,LEFT
+vice.com,62,MOSTLY FACTUAL,LEFT
+huffpost.com,58,MOSTLY FACTUAL,LEFT
+newsweek.com,55,MOSTLY FACTUAL,LEFT-CENTER
+bild.de,32,MIXED,RIGHT
+nypost.com,42,MIXED,RIGHT-CENTER
+dailymail.co.uk,30,MIXED,RIGHT-CENTER
+foxnews.com,38,MIXED,RIGHT
+dailywire.com,25,MIXED,RIGHT
+theblaze.com,22,MIXED,RIGHT
+oann.com,20,LOW,RIGHT
+epochtimes.com,18,LOW,RIGHT
+zerohedge.com,15,LOW,RIGHT
+rt.com,10,LOW,RIGHT
+sputniknews.com,8,LOW,RIGHT
+breitbart.com,12,LOW,RIGHT
+infowars.com,2,VERY LOW,RIGHT
+naturalnews.com,3,VERY LOW,RIGHT
+globalresearch.ca,5,VERY LOW,LEFT
+beforeitsnews.com,4,VERY LOW,CONSPIRACY
