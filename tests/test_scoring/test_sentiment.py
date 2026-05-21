@@ -173,6 +173,9 @@ class TestClickbaitScore:
     def test_contraction_variant_detected(self):
         assert _clickbait_score("You wont believe this story.") > 0.0
 
+    def test_curly_apostrophe_variant_detected(self):
+        assert _clickbait_score("You won’t believe what they don’t want you to know.") > 0.0
+
     def test_withholding_framing_detected(self):
         assert _clickbait_score("What they don't want you to know about vaccines.") > 0.0
 
