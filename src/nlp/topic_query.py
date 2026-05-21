@@ -116,6 +116,8 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
                 raise
         for kw_list in keyword_lists:
             for kw in kw_list:
+                if _is_media_org(kw):
+                    continue
                 _add(kw)
                 if word_count >= max_terms:
                     break

@@ -119,3 +119,22 @@ class TestMediaOrgFiltering:
         )
         result = build_topic_query([item])
         assert "CNN" not in result
+
+    def test_media_keywords_filtered_from_fallback(self, monkeypatch):
+        item = {
+            "source": "Reuters",
+            "entities": {
+                "persons": [],
+                "organizations": [],
+                "locations": [],
+                "events": [],
+            },
+        }
+        monkeypatch.setattr(
+            "src.nlp.topic_query.extract_keywords",
+            lambda _items, top_n: [["bbc", "cnn", "economy"]],
+        )
+        result = build_topic_query([item], max_terms=3)
+        assert "economy" in result
+        assert "bbc" not in result.lower()
+        assert "cnn" not in result.lower()
