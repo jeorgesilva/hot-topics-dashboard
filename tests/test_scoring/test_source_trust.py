@@ -15,6 +15,8 @@ import pytest
 from src.scoring.source_trust import (
     HIGH_TRUST_THRESHOLD,
     NEUTRAL_SCORE,
+    _UNKNOWN_BREAKING_SCORE,
+    _UNKNOWN_SCORE,
     _domain_from_url,
     _load_trust_db,
     compute_coverage_metrics,
@@ -128,13 +130,27 @@ class TestGetTrustScore:
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
             assert get_trust_score("www.bbc.com") == 86.0
 
-    def test_unknown_domain_returns_neutral(self):
+    def test_unknown_domain_returns_lower_default(self):
+        # Unknown domains are penalised below 50 — a missing domain is more
+        # likely to be a shell site than a genuinely neutral outlet.
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
-            assert get_trust_score("unknown-site.com") == NEUTRAL_SCORE
+            assert get_trust_score("unknown-site.com") == _UNKNOWN_SCORE
 
-    def test_custom_neutral_value(self):
+    def test_unknown_domain_breaking_topic_returns_lower_score(self):
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            score = get_trust_score("unknown-site.com", topic_is_breaking=True)
+            assert score == _UNKNOWN_BREAKING_SCORE
+            assert score < _UNKNOWN_SCORE
+
+    def test_explicit_neutral_overrides_contextual_default(self):
+        # Callers that manage their own neutral (e.g. compute_coverage_metrics)
+        # can still pass it explicitly and it takes precedence.
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
             assert get_trust_score("unknown-site.com", neutral=30.0) == 30.0
+
+    def test_known_domain_unaffected_by_topic_is_breaking(self):
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            assert get_trust_score("reuters.com", topic_is_breaking=True) == 94.0
 
     def test_case_insensitive(self):
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):

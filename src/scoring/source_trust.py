@@ -27,8 +27,14 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CSV_PATH = _PROJECT_ROOT / "config" / "source_trust.csv"
 
-NEUTRAL_SCORE: float = 50.0
+NEUTRAL_SCORE: float = 50.0       # used as explicit default in compute_coverage_metrics
 HIGH_TRUST_THRESHOLD: float = 60.0
+
+# Scores assigned to domains absent from the trust DB.
+# A missing domain is more likely to be a shell/spam site than a neutral outlet,
+# so we use a penalty below 50 instead of the old neutral default.
+_UNKNOWN_SCORE: float = 45.0          # unknown domain, non-breaking topic
+_UNKNOWN_BREAKING_SCORE: float = 35.0 # unknown domain in a breaking/viral story
 
 
 def _load_trust_db(csv_path: Path = _CSV_PATH) -> dict[str, float]:
@@ -61,20 +67,36 @@ def _load_trust_db(csv_path: Path = _CSV_PATH) -> dict[str, float]:
 _TRUST_DB: dict[str, float] = _load_trust_db()
 
 
-def get_trust_score(domain: str, neutral: float = NEUTRAL_SCORE) -> float:
+def get_trust_score(
+    domain: str,
+    neutral: float | None = None,
+    topic_is_breaking: bool = False,
+) -> float:
     """Return the trust score (0–100) for a domain.
 
-    Strips 'www.' prefix before lookup. Returns *neutral* for unknown domains.
+    Strips 'www.' prefix before lookup. For unknown domains the returned score
+    depends on context: a domain not in the trust DB is penalised below 50
+    because novel or obscure domains are more likely to be shell/spam sites
+    than genuinely neutral outlets. The penalty is steeper for breaking stories
+    where coordinated misinformation spikes.
 
     Args:
         domain: Bare domain name, e.g. 'bbc.com' or 'www.reuters.com'.
-        neutral: Score returned when domain is not in the trust DB.
+        neutral: Explicit override score for unknown domains. When provided,
+            bypasses the contextual defaults (for backwards-compatible call
+            sites and compute_coverage_metrics which manages its own neutral).
+        topic_is_breaking: If True, unknown domains receive
+            _UNKNOWN_BREAKING_SCORE instead of _UNKNOWN_SCORE.
 
     Returns:
         Trust score in [0, 100].
     """
     key = domain.lower().strip().removeprefix("www.")
-    return _TRUST_DB.get(key, neutral)
+    if key in _TRUST_DB:
+        return _TRUST_DB[key]
+    if neutral is not None:
+        return neutral
+    return _UNKNOWN_BREAKING_SCORE if topic_is_breaking else _UNKNOWN_SCORE
 
 
 def _domain_from_url(url: str) -> str:
