@@ -85,8 +85,8 @@ def get_trust_score(
         neutral: Explicit override score for unknown domains. When provided,
             bypasses the contextual defaults (for backwards-compatible call
             sites and compute_coverage_metrics which manages its own neutral).
-        topic_is_breaking: If True, unknown domains receive _UNKNOWN_BREAKING_SCORE
-            (35) instead of _UNKNOWN_SCORE (45).
+        topic_is_breaking: If True, unknown domains receive
+            _UNKNOWN_BREAKING_SCORE instead of _UNKNOWN_SCORE.
 
     Returns:
         Trust score in [0, 100].
