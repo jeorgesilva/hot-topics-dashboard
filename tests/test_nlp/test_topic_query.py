@@ -75,8 +75,8 @@ class TestMediaOrgFiltering:
             source="BBC News",
         )
         result = build_topic_query([item])
-        assert "BBC" not in result
-        assert "BBC News" not in result
+        assert "bbc" not in result.lower()
+        assert "bbc news" not in result.lower()
 
     def test_media_token_org_excluded(self):
         # "CNN" contains no _MEDIA_TOKENS but "Daily Mail" contains "daily"
@@ -118,7 +118,7 @@ class TestMediaOrgFiltering:
             source="Los Angeles Times",
         )
         result = build_topic_query([item])
-        assert "CNN" not in result
+        assert "cnn" not in result.lower()
 
     def test_media_keywords_filtered_from_fallback(self, monkeypatch):
         item = {
