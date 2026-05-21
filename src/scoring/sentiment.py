@@ -71,7 +71,13 @@ def _sensationalism(text: str) -> float:
     if not words:
         return 0.0
 
-    caps_ratio = sum(1 for w in words if len(w) > 1 and w.isupper()) / len(words)
+    # Only consider words longer than 3 chars so common acronyms (WHO, FBI,
+    # CIA, BBC, CNN, EU, UK) don't inflate the caps signal on legitimate news.
+    long_words = [w for w in words if len(w) > 3]
+    if long_words:
+        caps_ratio = sum(1 for w in long_words if w.isupper()) / len(long_words)
+    else:
+        caps_ratio = 0.0
     exclamation_score = min(text.count("!") / 3, 1.0)
     term_hits = sum(
         1 for w in words if w.lower().strip(".,!?;:'\"") in _SENSATIONAL_TERMS
