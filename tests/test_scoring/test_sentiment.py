@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.scoring.sentiment import _parse_scores, _sensationalism, score_article, score_articles
+from src.scoring.sentiment import _clickbait_score, _parse_scores, _sensationalism, score_article, score_articles
 from src.utils.models import RawItem
 
 
@@ -150,6 +150,64 @@ class TestSensationalism:
         # These are caps words of len 4+ so they DO contribute, but the
         # sentence has no exclamations or loaded terms — score stays moderate.
         assert 0.0 < score < 0.5
+
+    def test_clickbait_pattern_raises_score(self):
+        # A factual sentence and one with a withholding framing — only the
+        # second should receive a clickbait contribution.
+        factual = "Scientists publish new findings on climate adaptation."
+        clickbait = "The real reason they don't want you to know the truth."
+        assert _sensationalism(clickbait) > _sensationalism(factual)
+
+
+# ---------------------------------------------------------------------------
+# _clickbait_score unit tests
+# ---------------------------------------------------------------------------
+
+class TestClickbaitScore:
+    def test_no_patterns_returns_zero(self):
+        assert _clickbait_score("Scientists discover new vaccine candidate.") == 0.0
+
+    def test_you_wont_believe_detected(self):
+        assert _clickbait_score("You won't believe what happened next.") > 0.0
+
+    def test_contraction_variant_detected(self):
+        assert _clickbait_score("You wont believe this story.") > 0.0
+
+    def test_curly_apostrophe_variant_detected(self):
+        assert _clickbait_score("You won’t believe what they don’t want you to know.") > 0.0
+
+    def test_withholding_framing_detected(self):
+        assert _clickbait_score("What they don't want you to know about vaccines.") > 0.0
+
+    def test_finally_revealed_detected(self):
+        assert _clickbait_score("Finally revealed: the secret behind the scandal.") > 0.0
+
+    def test_real_reason_detected(self):
+        assert _clickbait_score("The real reason the government is hiding the data.") > 0.0
+
+    def test_list_bait_detected(self):
+        assert _clickbait_score("5 shocking things scientists don't want you to know.") > 0.0
+
+    def test_three_matches_saturates_at_one(self):
+        text = (
+            "You won't believe the real reason they don't want you to know. "
+            "Finally revealed: the hidden story."
+        )
+        assert _clickbait_score(text) == 1.0
+
+    def test_score_bounded_zero_to_one(self):
+        extreme = " ".join([
+            "You won't believe the real reason they don't want you to know.",
+            "Finally revealed: what the government is hiding.",
+            "Is the president lying about the economy?",
+        ])
+        score = _clickbait_score(extreme)
+        assert 0.0 <= score <= 1.0
+
+    def test_case_insensitive(self):
+        upper = _clickbait_score("YOU WON'T BELIEVE THIS")
+        lower = _clickbait_score("you won't believe this")
+        assert upper == lower
 
 
 # ---------------------------------------------------------------------------

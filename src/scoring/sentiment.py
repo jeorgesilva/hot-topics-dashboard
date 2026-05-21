@@ -1,6 +1,7 @@
 """Per-article sentiment and sensationalism scoring (Week 2, Step 4)."""
 from __future__ import annotations
 
+import re
 from typing import TypedDict
 
 from src.nlp.preprocessor import preprocess
@@ -8,12 +9,54 @@ from src.utils.models import RawItem
 
 _pipeline = None
 
+# ── Sensationalism lexicon ────────────────────────────────────────────────────
+# Expanded from 18 to ~80 single-word terms grouped by semantic category.
+# Multi-word patterns are handled separately by _CLICKBAIT_PATTERNS.
 _SENSATIONAL_TERMS: frozenset[str] = frozenset({
-    "shocking", "bombshell", "exposed", "explosive", "breaking",
-    "urgent", "outrage", "scandal", "conspiracy", "hoax",
-    "unbelievable", "stunning", "leaked", "alarming",
-    "devastating", "catastrophic", "coverup", "cover-up",
+    # Urgency / Breaking
+    "breaking", "urgent", "alert", "developing", "exclusive",
+    "emergency", "flash", "live",
+    # Conspiracy / Cover-up
+    "conspiracy", "coverup", "cover-up", "censored", "suppressed",
+    "whistleblower", "plandemic", "scamdemic", "globalist", "banned",
+    "shadowbanned", "deepstate",
+    # Revelation / Exposure
+    "exposed", "leaked", "revealed", "uncovered", "bombshell", "explosive",
+    "damning", "incriminating", "scandalous",
+    # Fear / Catastrophe
+    "catastrophic", "devastating", "alarming", "terrifying", "horrifying",
+    "crisis", "collapse", "apocalyptic", "existential", "annihilation",
+    "extinction",
+    # Outrage / Scandal
+    "outrage", "scandal", "shocking", "disgrace", "disgusting",
+    "appalling", "unbelievable", "stunning", "staggering", "outrageous",
+    "unthinkable", "despicable",
+    # Medical misinformation
+    "hoax", "depopulation", "miracle",
+    # Political sensationalism
+    "treason", "traitor", "traitors", "coup", "rigged", "stolen",
+    "overthrow",
+    # Deception
+    "lied", "lying", "liar", "liars", "deceived", "deceiving",
+    "fabricated", "falsified", "manipulation",
+    # Superlatives / Hyperbole
+    "unprecedented", "unimaginable", "mind-blowing", "earth-shattering",
+    "jaw-dropping",
 })
+
+# ── Structural clickbait patterns ─────────────────────────────────────────────
+# Regex patterns that detect manipulation framings independent of individual
+# word choices. Compiled once at import time for performance.
+_CLICKBAIT_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"you won(?:'|’)?t believe", re.IGNORECASE),
+    re.compile(r"the (real|true|hidden|secret|shocking) (reason|truth|story)", re.IGNORECASE),
+    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:'|’)?t want you", re.IGNORECASE),
+    re.compile(r"is .{3,40}(hiding|lying|corrupt\b|guilty\b)", re.IGNORECASE),
+    re.compile(r"\d+\s+(things?|reasons?|ways?|facts?|secrets?).{0,25}(shocking|amaz|unbeliev|crazy|wild)", re.IGNORECASE),
+    re.compile(r"(finally|now|just)\s+(revealed|exposed|confirmed|proven|admitted)", re.IGNORECASE),
+    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:'|’)?t|ignor)", re.IGNORECASE),
+    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:'|’)?t|won(?:'|’)?t|refuse to)", re.IGNORECASE),
+)
 
 
 class ScoredArticle(TypedDict):
@@ -61,11 +104,27 @@ def _parse_scores(raw: list[dict]) -> tuple[str, float, float]:
     return best["label"].lower(), best["score"], abs(pos - neg)
 
 
+def _clickbait_score(text: str) -> float:
+    """Return a structural clickbait score in [0.0, 1.0].
+
+    Detects manipulation framings that bypass single-word lexicons:
+    withholding constructions ("they don't want you to know"), rhetorical
+    accusations ("is X hiding?"), list-bait ("5 things that will shock you"),
+    and false-revelation structures ("finally revealed").
+    Three or more pattern matches saturate the score at 1.0.
+    """
+    hits = sum(1 for pattern in _CLICKBAIT_PATTERNS if pattern.search(text))
+    return min(hits / 3, 1.0)
+
+
 def _sensationalism(text: str) -> float:
     """Compute a sensationalism heuristic score in [0.0, 1.0].
 
-    Combines ALL-CAPS word ratio (40%), exclamation density (30%),
-    and loaded-term hits (30%).
+    Four components (weights sum to 1.0):
+    - ALL-CAPS ratio among words longer than 3 chars  × 0.30
+    - Exclamation mark density (≥ 3 marks = max)      × 0.25
+    - Loaded-term lexicon hits (≥ 3 hits = max)        × 0.25
+    - Structural clickbait pattern matches             × 0.20
     """
     words = text.split()
     if not words:
@@ -78,13 +137,20 @@ def _sensationalism(text: str) -> float:
         caps_ratio = sum(1 for w in long_words if w.isupper()) / len(long_words)
     else:
         caps_ratio = 0.0
+
     exclamation_score = min(text.count("!") / 3, 1.0)
     term_hits = sum(
         1 for w in words if w.lower().strip(".,!?;:'\"") in _SENSATIONAL_TERMS
     )
     term_score = min(term_hits / 3, 1.0)
 
-    return round(caps_ratio * 0.4 + exclamation_score * 0.3 + term_score * 0.3, 4)
+    return round(
+        caps_ratio * 0.30
+        + exclamation_score * 0.25
+        + term_score * 0.25
+        + _clickbait_score(text) * 0.20,
+        4,
+    )
 
 
 def score_article(item: RawItem) -> ScoredArticle:
