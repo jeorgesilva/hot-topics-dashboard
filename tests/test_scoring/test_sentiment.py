@@ -137,6 +137,20 @@ class TestSensationalism:
     def test_score_is_float(self):
         assert isinstance(_sensationalism("some text"), float)
 
+    def test_short_acronyms_dont_inflate_caps(self):
+        # WHO, FBI, CIA, EU, UK are legitimate acronyms (len ≤ 3). They should
+        # not trigger the caps signal the way SHOCKING or BOMBSHELL would.
+        legitimate = "WHO warns that FBI and CIA have EU and UK concerns"
+        sensational = "SHOCKING BOMBSHELL EXPOSED conspiracy LEAKED"
+        assert _sensationalism(legitimate) < _sensationalism(sensational)
+
+    def test_four_char_acronym_still_counted(self):
+        # Words with len > 3 (e.g. NASA, CNBC) are still assessed.
+        score = _sensationalism("NASA CNBC ESPN MSNBC confirms report")
+        # These are caps words of len 4+ so they DO contribute, but the
+        # sentence has no exclamations or loaded terms — score stays moderate.
+        assert 0.0 < score < 0.5
+
 
 # ---------------------------------------------------------------------------
 # score_article integration tests
