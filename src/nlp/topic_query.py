@@ -100,9 +100,9 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
             for entity in item["entities"][bucket]:
                 if word_count >= max_terms:
                     break
-                # Apply filter to all buckets — spaCy occasionally mislabels
-                # news channels (e.g. "ABC7 Los Angeles") as PERSON entities.
-                if _is_media_org(entity):
+                # Restrict media-outlet filtering to ORG entities so locations
+                # and persons containing ambiguous tokens are preserved.
+                if bucket == "organizations" and _is_media_org(entity):
                     continue
                 _add(entity)
 
