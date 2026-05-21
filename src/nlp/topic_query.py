@@ -50,9 +50,30 @@ def build_topic_query(items: list[AnnotatedItem], max_terms: int = 5) -> str:
         (item.get("source") or "").lower() for item in items
     } - {""}
 
+    def _normalise_tokens(text: str) -> tuple[str, ...]:
+        return tuple(re.findall(r"[a-z0-9]+", text.lower()))
+
+    def _token_sequence_in(needle: tuple[str, ...], haystack: tuple[str, ...]) -> bool:
+        if not needle or len(needle) > len(haystack):
+            return False
+        return any(
+            haystack[i:i + len(needle)] == needle
+            for i in range(len(haystack) - len(needle) + 1)
+        )
+
+    _source_tokens: tuple[tuple[str, ...], ...] = tuple(
+        _normalise_tokens(src) for src in _source_lower
+    )
+
     def _is_media_org(entity: str) -> bool:
         e = entity.lower()
-        if any(e == src or e in src or src in e for src in _source_lower):
+        entity_tokens = _normalise_tokens(e)
+        if any(
+            entity_tokens == src_tokens
+            or _token_sequence_in(entity_tokens, src_tokens)
+            or _token_sequence_in(src_tokens, entity_tokens)
+            for src_tokens in _source_tokens
+        ):
             return True
         tokens = set(e.split())
         if tokens & _MEDIA_TOKENS:
