@@ -111,7 +111,7 @@ def _clickbait_score(text: str) -> float:
     withholding constructions ("they don't want you to know"), rhetorical
     accusations ("is X hiding?"), list-bait ("5 things that will shock you"),
     and false-revelation structures ("finally revealed").
-    Three or more pattern matches saturates the score at 1.0.
+    Three or more pattern matches saturate the score at 1.0.
     """
     hits = sum(1 for pattern in _CLICKBAIT_PATTERNS if pattern.search(text))
     return min(hits / 3, 1.0)
