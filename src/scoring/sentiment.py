@@ -48,14 +48,14 @@ _SENSATIONAL_TERMS: frozenset[str] = frozenset({
 # Regex patterns that detect manipulation framings independent of individual
 # word choices. Compiled once at import time for performance.
 _CLICKBAIT_PATTERNS: tuple[re.Pattern, ...] = (
-    re.compile(r"you won[\'’]?t believe", re.IGNORECASE),
+    re.compile(r"you won(?:'|’)?t believe", re.IGNORECASE),
     re.compile(r"the (real|true|hidden|secret|shocking) (reason|truth|story)", re.IGNORECASE),
-    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don[\'’]?t want you", re.IGNORECASE),
+    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:'|’)?t want you", re.IGNORECASE),
     re.compile(r"is .{3,40}(hiding|lying|corrupt\b|guilty\b)", re.IGNORECASE),
     re.compile(r"\d+\s+(things?|reasons?|ways?|facts?|secrets?).{0,25}(shocking|amaz|unbeliev|crazy|wild)", re.IGNORECASE),
     re.compile(r"(finally|now|just)\s+(revealed|exposed|confirmed|proven|admitted)", re.IGNORECASE),
-    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won[\'’]?t|ignor)", re.IGNORECASE),
-    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don[\'’]?t|won[\'’]?t|refuse to)", re.IGNORECASE),
+    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:'|’)?t|ignor)", re.IGNORECASE),
+    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:'|’)?t|won(?:'|’)?t|refuse to)", re.IGNORECASE),
 )
 
 
