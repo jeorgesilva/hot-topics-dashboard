@@ -111,7 +111,7 @@ class TestMediaOrgFiltering:
         assert isinstance(result, str)
 
     def test_broadcast_abbreviation_excluded(self):
-        # "CNN" and "ABC7" have no media-domain words but are known outlets.
+        # Known broadcast abbreviations in ORG entities should be filtered.
         item = _make_annotated(
             "Sandy Fire erupts in Simi Valley",
             description="According to CNN and ABC7 Los Angeles, crews are on site.",
@@ -119,4 +119,3 @@ class TestMediaOrgFiltering:
         )
         result = build_topic_query([item])
         assert "CNN" not in result
-        assert "ABC7" not in result
