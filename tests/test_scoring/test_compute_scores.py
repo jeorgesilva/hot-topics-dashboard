@@ -91,6 +91,8 @@ class TestComputeRisk:
             coverage_ratio=0.0,
             framing_inconsistency=1.0,
             sensationalism_avg=1.0,
+            attribution_vagueness=1.0,
+            fact_inconsistency=1.0,
         )
         assert risk == pytest.approx(1.0)
 
@@ -104,13 +106,17 @@ class TestComputeRisk:
             coverage_ratio=0.6,
             framing_inconsistency=0.4,
             sensationalism_avg=0.3,
+            attribution_vagueness=0.2,
+            fact_inconsistency=0.1,
         )
         expected = (
-            0.30 * (1 - 60 / 100)
-            + 0.25 * 0.5
+            0.25 * (1 - 60 / 100)
+            + 0.20 * 0.5
             + 0.20 * (1 - 0.6)
             + 0.15 * 0.4
             + 0.10 * 0.3
+            + 0.05 * 0.2
+            + 0.05 * 0.1
         )
         assert risk == pytest.approx(expected, abs=1e-6)
 
@@ -171,6 +177,7 @@ class TestExplainScore:
         expected_keys = {
             "source_distrust", "sentiment_extremity",
             "low_credible_coverage", "framing_inconsistency", "sensationalism",
+            "attribution_vagueness", "fact_inconsistency",
         }
         assert expected_keys == result["contributions"].keys()
 
