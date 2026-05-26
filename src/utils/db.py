@@ -115,6 +115,14 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             computed_at             TEXT
         )
     """)
+    # Idempotent migration: add columns introduced after initial schema deploy.
+    existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(topic_scores)").fetchall()
+    }
+    for col in ("attribution_vagueness", "fact_inconsistency"):
+        if col not in existing:
+            conn.execute(f"ALTER TABLE topic_scores ADD COLUMN {col} REAL")
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
     return conn
