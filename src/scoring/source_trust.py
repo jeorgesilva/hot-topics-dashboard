@@ -139,7 +139,9 @@ def compute_coverage_metrics(
 
     Returns:
         Dict with keys: avg_trust, trust_variance, coverage_breadth,
-        coverage_ratio. All default to neutral/0 when the topic has no articles.
+        coverage_ratio. coverage_ratio is the fraction of unique source domains
+        that meet the credibility threshold (not article count). All default to
+        neutral/0 when the topic has no articles.
     """
     rows = conn.execute(
         """
@@ -160,25 +162,27 @@ def compute_coverage_metrics(
         }
 
     scores: list[float] = []
+    all_domains: set[str] = set()
     credible_domains: set[str] = set()
 
     for row in rows:
         domain = _domain_from_url(row["url"]) or row["source"]
         score = get_trust_score(domain, neutral=neutral)
         scores.append(score)
+        all_domains.add(domain)
         if score >= high_trust_threshold:
             credible_domains.add(domain)
 
     n = len(scores)
     avg = sum(scores) / n
     variance = math.sqrt(sum((s - avg) ** 2 for s in scores) / n) if n > 1 else 0.0
-    credible_count = sum(1 for s in scores if s >= high_trust_threshold)
+    total_domains = len(all_domains)
 
     return {
         "avg_trust": round(avg, 4),
         "trust_variance": round(variance, 4),
         "coverage_breadth": len(credible_domains),
-        "coverage_ratio": round(credible_count / n, 4),
+        "coverage_ratio": round(len(credible_domains) / total_domains, 4),
     }
 
 
