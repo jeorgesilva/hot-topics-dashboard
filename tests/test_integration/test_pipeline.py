@@ -7,6 +7,7 @@ including the new attribution_vagueness and fact_inconsistency columns.
 
 from __future__ import annotations
 
+import socket
 import subprocess
 import sys
 import time
@@ -228,24 +229,40 @@ class TestAppStartup:
         assert result.returncode == 0, result.stderr
 
     def test_app_starts_without_error(self):
+        # Find a free ephemeral port so the test never conflicts with other processes.
+        with socket.socket() as s:
+            s.bind(("", 0))
+            port = s.getsockname()[1]
+
         proc = subprocess.Popen(
             [
                 sys.executable, "-m", "streamlit", "run",
                 "src/dashboard/app.py",
                 "--server.headless", "true",
-                "--server.port", "18766",
+                f"--server.port={port}",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
         try:
-            time.sleep(8)
+            # Poll until the HTTP port is accepting connections (max 20 s).
+            deadline = time.monotonic() + 20
+            started = False
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break  # process died — assertion below will catch it
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                        started = True
+                        break
+                except OSError:
+                    time.sleep(0.3)
+
             assert proc.poll() is None, (
-                f"Streamlit process exited unexpectedly.\n"
-                f"stdout: {proc.stdout.read()}\n"
-                f"stderr: {proc.stderr.read()}"
+                "Streamlit process exited unexpectedly before becoming ready."
             )
+            assert started, f"Streamlit did not bind to port {port} within 20 s."
         finally:
             proc.terminate()
             proc.wait(timeout=5)
