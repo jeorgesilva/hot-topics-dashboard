@@ -9,7 +9,11 @@ Person B tab: source trust, coverage breadth, composite risk table and charts.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# Ensure project root is on sys.path when running via `streamlit run src/dashboard/app.py`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import pandas as pd
 import plotly.express as px
