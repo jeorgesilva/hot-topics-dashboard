@@ -196,10 +196,31 @@ class TestComputeCoverageMetrics:
         assert m["coverage_breadth"] == 2
 
     def test_coverage_ratio_correct(self, seeded_db):
-        # 2 of 3 articles are from credible sources
+        # 3 articles from 3 unique domains: reuters + bbc credible, infowars not → 2/3
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
             m = compute_coverage_metrics(0, seeded_db)
         assert abs(m["coverage_ratio"] - 2 / 3) < 0.01
+
+    def test_coverage_ratio_uses_unique_domains_not_article_count(self, db_conn):
+        # 5 reuters articles (credible) + 1 infowars article (not credible)
+        # Old formula: 5/6 ≈ 0.833  |  New formula: 1 credible domain / 2 total = 0.5
+        items = [
+            _make_item(f"r{i}", "https://reuters.com/article/{i}") for i in range(5)
+        ] + [_make_item("iw1", "https://infowars.com/story/1")]
+        insert_items(db_conn, items)
+        with db_conn:
+            db_conn.execute(
+                "INSERT INTO topics (id, label, created_at, item_count)"
+                " VALUES (2, 'T', '2026-05-19T10:00:00Z', 6)"
+            )
+            db_conn.executemany(
+                "INSERT INTO topic_sources (topic_id, item_id) VALUES (2, ?)",
+                [(f"r{i}",) for i in range(5)] + [("iw1",)],
+            )
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            m = compute_coverage_metrics(2, db_conn)
+        assert m["coverage_ratio"] == pytest.approx(0.5, abs=0.01)
+        assert m["coverage_breadth"] == 1
 
     def test_empty_topic_returns_neutral_defaults(self, db_conn):
         with db_conn:

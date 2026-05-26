@@ -1,15 +1,17 @@
-"""Topic-level composite risk scorer (Week 2, Step 5).
+"""Topic-level composite risk scorer.
 
-Aggregates four Person-B coverage signals and three Person-A NLP signals
-into a single composite_risk score (0–1) per topic, then maps it to a
+Aggregates Person-B coverage signals and Person-A NLP signals into a
+single composite_risk score (0–1) per topic, then maps it to a
 reliability grade (A–F).
 
 Formula (weights sum to 1.0):
-    risk = 0.30 * (1 - avg_trust / 100)
-         + 0.25 * avg_sentiment_extremity
+    risk = 0.25 * (1 - avg_trust / 100)
+         + 0.20 * avg_sentiment_extremity
          + 0.20 * (1 - coverage_ratio)
          + 0.15 * framing_inconsistency
          + 0.10 * sensationalism_avg
+         + 0.05 * attribution_vagueness
+         + 0.05 * fact_inconsistency
 
 Usage:
     python src/scoring/compute_scores.py
@@ -30,11 +32,13 @@ logger = logging.getLogger(__name__)
 
 # Composite formula weights — must sum to 1.0
 _WEIGHTS: dict[str, float] = {
-    "avg_trust":              0.30,
-    "avg_sentiment_extremity": 0.25,
+    "avg_trust":              0.25,
+    "avg_sentiment_extremity": 0.20,
     "coverage_ratio":         0.20,
     "framing_inconsistency":  0.15,
     "sensationalism_avg":     0.10,
+    "attribution_vagueness":  0.05,
+    "fact_inconsistency":     0.05,
 }
 
 assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
@@ -48,6 +52,8 @@ def compute_risk(
     coverage_ratio: float,
     framing_inconsistency: float,
     sensationalism_avg: float,
+    attribution_vagueness: float = 0.0,
+    fact_inconsistency: float = 0.0,
 ) -> float:
     """Apply the composite risk formula.
 
@@ -57,9 +63,11 @@ def compute_risk(
     Args:
         avg_trust: Mean source trust score (0–100) from source_trust.py.
         avg_sentiment_extremity: Mean sentiment extremity (0–1) from Person A.
-        coverage_ratio: Fraction of articles from credible sources (0–1).
+        coverage_ratio: Fraction of unique credible domains (0–1).
         framing_inconsistency: Cosine-distance-based framing divergence (0–1) from Person A.
         sensationalism_avg: Mean sensationalism score (0–1) from Person A.
+        attribution_vagueness: Vague attribution density (0–1) from Person A. Defaults to 0.0.
+        fact_inconsistency: NER entity overlap inconsistency (0–1) from Person A. Defaults to 0.0.
 
     Returns:
         Composite risk in [0.0, 1.0].
@@ -70,6 +78,8 @@ def compute_risk(
         + _WEIGHTS["coverage_ratio"]          * (1.0 - coverage_ratio)
         + _WEIGHTS["framing_inconsistency"]   * framing_inconsistency
         + _WEIGHTS["sensationalism_avg"]      * sensationalism_avg
+        + _WEIGHTS["attribution_vagueness"]   * attribution_vagueness
+        + _WEIGHTS["fact_inconsistency"]      * fact_inconsistency
     )
 
 
@@ -119,11 +129,13 @@ def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
     r = dict(row)
     avg_trust = r["avg_trust"] or 0.0
     contributions = {
-        "source_distrust":           round(_WEIGHTS["avg_trust"] * (1.0 - avg_trust / 100.0), 4),
-        "sentiment_extremity":       round(_WEIGHTS["avg_sentiment_extremity"] * (r["avg_sentiment_extremity"] or 0.0), 4),
-        "low_credible_coverage":     round(_WEIGHTS["coverage_ratio"] * (1.0 - (r["coverage_ratio"] or 0.0)), 4),
-        "framing_inconsistency":     round(_WEIGHTS["framing_inconsistency"] * (r["framing_inconsistency"] or 0.0), 4),
-        "sensationalism":            round(_WEIGHTS["sensationalism_avg"] * (r["sensationalism_avg"] or 0.0), 4),
+        "source_distrust":       round(_WEIGHTS["avg_trust"] * (1.0 - avg_trust / 100.0), 4),
+        "sentiment_extremity":   round(_WEIGHTS["avg_sentiment_extremity"] * (r["avg_sentiment_extremity"] or 0.0), 4),
+        "low_credible_coverage": round(_WEIGHTS["coverage_ratio"] * (1.0 - (r["coverage_ratio"] or 0.0)), 4),
+        "framing_inconsistency": round(_WEIGHTS["framing_inconsistency"] * (r["framing_inconsistency"] or 0.0), 4),
+        "sensationalism":        round(_WEIGHTS["sensationalism_avg"] * (r["sensationalism_avg"] or 0.0), 4),
+        "attribution_vagueness": round(_WEIGHTS["attribution_vagueness"] * (r["attribution_vagueness"] or 0.0), 4),
+        "fact_inconsistency":    round(_WEIGHTS["fact_inconsistency"] * (r["fact_inconsistency"] or 0.0), 4),
     }
     return {
         "topic_id":      topic_id,
@@ -150,7 +162,8 @@ def compute_composite(conn: sqlite3.Connection) -> int:
     rows = conn.execute(
         """
         SELECT topic_id, avg_trust, avg_sentiment_extremity,
-               coverage_ratio, framing_inconsistency, sensationalism_avg
+               coverage_ratio, framing_inconsistency, sensationalism_avg,
+               attribution_vagueness, fact_inconsistency
         FROM topic_scores
         WHERE avg_trust IS NOT NULL
           AND avg_sentiment_extremity IS NOT NULL
@@ -169,6 +182,8 @@ def compute_composite(conn: sqlite3.Connection) -> int:
             coverage_ratio=row["coverage_ratio"] or 0.0,
             framing_inconsistency=row["framing_inconsistency"],
             sensationalism_avg=row["sensationalism_avg"],
+            attribution_vagueness=row["attribution_vagueness"] or 0.0,
+            fact_inconsistency=row["fact_inconsistency"] or 0.0,
         )
         conn.execute(
             """

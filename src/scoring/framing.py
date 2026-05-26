@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, TypedDict
 
+from src.nlp.ner import extract_entities
+
 if TYPE_CHECKING:
     from src.scoring.sentiment import ScoredArticle
 
@@ -15,6 +17,7 @@ _DEFAULT_TRUST: float = 50.0
 
 class FramingResult(TypedDict):
     framing_inconsistency: float
+    fact_inconsistency: float
     high_trust_centroid: list[float]
     low_trust_centroid: list[float]
     high_trust_articles: list[str]
@@ -51,6 +54,41 @@ def _mean_vector(vectors: list[list[float]]) -> list[float]:
     return [x / n for x in centroid]
 
 
+def _entity_overlap_score(
+    high_articles: list[ScoredArticle],
+    low_articles: list[ScoredArticle],
+) -> float:
+    """Jaccard distance between named-entity sets of the two trust tiers.
+
+    Extracts PERSON, ORG, and location entities from each tier's cleaned
+    text and returns 1 - (|intersection| / |union|). Returns 0.0 when
+    neither tier yields extractable entities to avoid penalising topics
+    where spaCy NER produces no annotations.
+
+    Args:
+        high_articles: Articles in the high-trust tier.
+        low_articles: Articles in the low-trust tier.
+
+    Returns:
+        Entity inconsistency in [0.0, 1.0].
+    """
+    def _entity_set(articles: list[ScoredArticle]) -> set[str]:
+        entities: set[str] = set()
+        for a in articles:
+            tags = extract_entities(a["cleaned_text"] or a["title"])
+            for bucket in ("persons", "organizations", "locations"):
+                for e in tags[bucket]:
+                    entities.add(e.lower().strip())
+        return entities
+
+    high_ents = _entity_set(high_articles)
+    low_ents = _entity_set(low_articles)
+    union = high_ents | low_ents
+    if not union:
+        return 0.0
+    return round(1.0 - len(high_ents & low_ents) / len(union), 4)
+
+
 def compute_framing(
     articles: list[ScoredArticle],
     trust_scores: dict[str, float],
@@ -77,6 +115,7 @@ def compute_framing(
     if not articles:
         return FramingResult(
             framing_inconsistency=0.0,
+            fact_inconsistency=0.0,
             high_trust_centroid=[],
             low_trust_centroid=[],
             high_trust_articles=[],
@@ -95,6 +134,7 @@ def compute_framing(
     if not high_articles or not low_articles:
         return FramingResult(
             framing_inconsistency=0.0,
+            fact_inconsistency=0.0,
             high_trust_centroid=[],
             low_trust_centroid=[],
             high_trust_articles=[a["url"] for a in high_articles],
@@ -117,6 +157,7 @@ def compute_framing(
 
     return FramingResult(
         framing_inconsistency=inconsistency,
+        fact_inconsistency=_entity_overlap_score(high_articles, low_articles),
         high_trust_centroid=high_centroid,
         low_trust_centroid=low_centroid,
         high_trust_articles=[a["url"] for a in high_articles],

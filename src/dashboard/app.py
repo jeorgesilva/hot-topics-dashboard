@@ -3,12 +3,12 @@
 Run with:
     streamlit run src/dashboard/app.py
 
-Person A panel: sentiment extremity, sensationalism, framing inconsistency.
-Person B panel: source trust, coverage breadth, composite risk (stub — to be filled).
+Person A tab: sentiment extremity, sensationalism, framing inconsistency charts.
+Person B tab: source trust, coverage breadth, composite risk table and charts.
 """
+
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -16,40 +16,38 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.scoring.compute_scores import grade_topic
+from src.scoring.compute_scores import _MISINFO_THRESHOLD, grade_topic
+from src.utils.db import init_db
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_DB = _PROJECT_ROOT / "data" / "dashboard.db"
 
-# Risk thresholds for visual callouts
-_HIGH_RISK = 0.60
+_HIGH_RISK = _MISINFO_THRESHOLD
 _MODERATE_RISK = 0.40
 
-# Colour palette consistent across all charts (low=green, high=red)
 _RISK_COLORSCALE = [
-    [0.0,  "#2ecc71"],  # green
-    [0.4,  "#f1c40f"],  # yellow
-    [0.7,  "#e67e22"],  # orange
-    [1.0,  "#e74c3c"],  # red
+    [0.0, "#2ecc71"],
+    [0.4, "#f1c40f"],
+    [0.7, "#e67e22"],
+    [1.0, "#e74c3c"],
 ]
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+_GRADE_COLOUR: dict[str, str] = {
+    "A": "#2ecc71",
+    "B": "#82b74b",
+    "C": "#f1c40f",
+    "D": "#e67e22",
+    "F": "#e74c3c",
+}
 
-def _get_conn(db_path: Path) -> sqlite3.Connection | None:
-    if not db_path.exists():
-        return None
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn
 
+# ── data loading ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def load_scored_topics(db_path: str) -> pd.DataFrame:
-    """Load topics with their scores from the DB; returns empty DataFrame if unavailable."""
-    conn = _get_conn(Path(db_path))
-    if conn is None:
-        return pd.DataFrame()
+    """Load all topics with their scores. Returns empty DataFrame if unavailable."""
     try:
+        conn = init_db(db_path)
         rows = conn.execute(
             """
             SELECT
@@ -59,11 +57,11 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 t.created_at,
                 ts.avg_sentiment_extremity  AS sentiment_extremity,
                 ts.sensationalism_avg       AS sensationalism,
-                ts.framing_inconsistency    AS framing_inconsistency,
-                ts.avg_trust                AS avg_trust,
-                ts.trust_variance           AS trust_variance,
-                ts.coverage_breadth         AS coverage_breadth,
-                ts.coverage_ratio           AS coverage_ratio,
+                ts.framing_inconsistency,
+                ts.avg_trust,
+                ts.trust_variance,
+                ts.coverage_breadth,
+                ts.coverage_ratio,
                 ts.composite_risk,
                 ts.computed_at
             FROM topics t
@@ -72,40 +70,38 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
             """
         ).fetchall()
         conn.close()
-        return pd.DataFrame([dict(r) for r in rows])
     except Exception:
-        conn.close()
         return pd.DataFrame()
 
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    scored = df["composite_risk"].notna()
+    df.loc[scored, "grade"] = df.loc[scored, "composite_risk"].apply(grade_topic)
+    df.loc[scored, "reliability_pct"] = ((1.0 - df.loc[scored, "composite_risk"]) * 100).round(1)
+    df["coverage_ratio_pct"] = (df["coverage_ratio"].fillna(0) * 100).round(1)
+    df["bubble_size"] = df["coverage_breadth"].fillna(0).clip(lower=1)
+    return df
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _truncate(label: str, n: int = 55) -> str:
     return label if len(label) <= n else label[:n] + "…"
 
 
-def _risk_badge(risk: float | None) -> str:
-    if risk is None:
-        return "—"
-    grade = grade_topic(risk)
-    color = (
-        "#e74c3c" if risk >= _HIGH_RISK
-        else "#e67e22" if risk >= _MODERATE_RISK
-        else "#2ecc71"
-    )
-    return f'<span style="color:{color};font-weight:700">{grade} ({risk:.2f})</span>'
-
-
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
-def _sidebar() -> Path:
+def _sidebar() -> str:
     st.sidebar.title("Hot Topics Dashboard")
     st.sidebar.caption("Misinformation risk scoring")
 
-    custom = st.sidebar.text_input(
+    db_path = st.sidebar.text_input(
         "Database path",
         value=str(_DEFAULT_DB),
         help="Absolute path to dashboard.db",
     )
-    db_path = Path(custom)
 
     st.sidebar.markdown("---")
     if st.sidebar.button("Refresh data", use_container_width=True):
@@ -123,7 +119,7 @@ def _sidebar() -> Path:
 
 # ── empty state ───────────────────────────────────────────────────────────────
 
-def _render_empty(db_path: Path) -> None:
+def _render_empty(db_path: str) -> None:
     st.warning(
         f"No scored topics found at `{db_path}`.\n\n"
         "Run the pipeline first:\n"
@@ -132,47 +128,43 @@ def _render_empty(db_path: Path) -> None:
     )
 
 
-# ── KPI cards ─────────────────────────────────────────────────────────────────
+# ── KPI row ───────────────────────────────────────────────────────────────────
 
 def _render_kpi_row(df: pd.DataFrame) -> None:
     scored = df[df["composite_risk"].notna()]
-    high_risk = (scored["composite_risk"] >= _HIGH_RISK).sum()
-    avg_sensationalism = (
-        df["sensationalism"].mean() if "sensationalism" in df else float("nan")
-    )
-    avg_framing = (
-        df["framing_inconsistency"].mean()
-        if "framing_inconsistency" in df
-        else float("nan")
-    )
+    high_risk_count = (scored["composite_risk"] >= _HIGH_RISK).sum()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Topics analysed", len(df))
-    c2.metric(
-        "High-risk topics",
-        int(high_risk),
-        delta=None,
-        help=f"composite_risk ≥ {_HIGH_RISK}",
-    )
+    c2.metric("High-risk topics", int(high_risk_count), help=f"composite_risk ≥ {_HIGH_RISK}")
     c3.metric(
-        "Avg sensationalism",
-        f"{avg_sensationalism:.2f}" if pd.notna(avg_sensationalism) else "—",
+        "Avg source trust",
+        f"{scored['avg_trust'].mean():.1f} / 100" if not scored.empty else "—",
     )
     c4.metric(
-        "Avg framing gap",
-        f"{avg_framing:.2f}" if pd.notna(avg_framing) else "—",
+        "Avg composite risk",
+        f"{scored['composite_risk'].mean():.3f}" if not scored.empty else "—",
     )
+
+
+# ── high-risk callout ─────────────────────────────────────────────────────────
+
+def _render_high_risk_callout(df: pd.DataFrame) -> None:
+    scored = df[df["composite_risk"].notna()]
+    flagged = scored[scored["composite_risk"] >= _HIGH_RISK].sort_values(
+        "composite_risk", ascending=False
+    )
+    if flagged.empty:
+        return
+    st.error(f"**{len(flagged)} high-risk topic(s) detected** (risk ≥ {_HIGH_RISK})")
+    for _, row in flagged.iterrows():
+        grade = row.get("grade", "?")
+        st.markdown(f"- **{grade}** `{row['composite_risk']:.2f}` — {_truncate(row['topic'], 80)}")
 
 
 # ── Person A charts ───────────────────────────────────────────────────────────
 
-def _hbar(
-    df: pd.DataFrame,
-    col: str,
-    title: str,
-    x_label: str,
-) -> go.Figure:
-    """Horizontal bar chart with risk colour scale, sorted descending."""
+def _hbar(df: pd.DataFrame, col: str, title: str, x_label: str) -> go.Figure:
     plot_df = (
         df[["topic", col]]
         .dropna(subset=[col])
@@ -180,17 +172,10 @@ def _hbar(
         .copy()
     )
     plot_df["label"] = plot_df["topic"].apply(_truncate)
-
     fig = px.bar(
-        plot_df,
-        x=col,
-        y="label",
-        orientation="h",
-        color=col,
-        color_continuous_scale=_RISK_COLORSCALE,
-        range_color=[0.0, 1.0],
-        labels={col: x_label, "label": ""},
-        title=title,
+        plot_df, x=col, y="label", orientation="h",
+        color=col, color_continuous_scale=_RISK_COLORSCALE, range_color=[0.0, 1.0],
+        labels={col: x_label, "label": ""}, title=title,
     )
     fig.update_layout(
         coloraxis_showscale=False,
@@ -204,12 +189,10 @@ def _hbar(
 
 def _render_person_a_charts(df: pd.DataFrame) -> None:
     st.subheader("Sentiment & Sensationalism")
-
     cols_needed = ["sentiment_extremity", "sensationalism", "framing_inconsistency"]
-    missing = [c for c in cols_needed if c not in df.columns or df[c].isna().all()]
-    if missing:
+    if any(c not in df.columns or df[c].isna().all() for c in cols_needed):
         st.info(
-            "Person A scores not yet computed. "
+            "Person A scores not yet available. "
             "Run `python src/scoring/compute_scores.py` to populate."
         )
         return
@@ -225,32 +208,23 @@ def _render_person_a_charts(df: pd.DataFrame) -> None:
             _hbar(df, "sensationalism", "Sensationalism Score", "Score (0–1)"),
             use_container_width=True,
         )
-
     st.plotly_chart(
-        _hbar(df, "framing_inconsistency", "Framing Inconsistency (high-trust vs low-trust tiers)", "Cosine distance (0–1)"),
+        _hbar(df, "framing_inconsistency", "Framing Inconsistency", "Cosine distance (0–1)"),
         use_container_width=True,
     )
 
 
-# ── scatter: sentiment vs sensationalism ──────────────────────────────────────
-
-def _render_scatter(df: pd.DataFrame) -> None:
+def _render_sentiment_scatter(df: pd.DataFrame) -> None:
     needed = ["sentiment_extremity", "sensationalism", "composite_risk"]
     if any(c not in df.columns or df[c].isna().all() for c in needed):
         return
-
     plot_df = df.dropna(subset=needed).copy()
     plot_df["label"] = plot_df["topic"].apply(lambda t: _truncate(t, 40))
     plot_df["grade"] = plot_df["composite_risk"].apply(grade_topic)
-
     fig = px.scatter(
-        plot_df,
-        x="sentiment_extremity",
-        y="sensationalism",
-        color="composite_risk",
-        color_continuous_scale=_RISK_COLORSCALE,
-        range_color=[0.0, 1.0],
-        size="articles",
+        plot_df, x="sentiment_extremity", y="sensationalism",
+        color="composite_risk", color_continuous_scale=_RISK_COLORSCALE,
+        range_color=[0.0, 1.0], size="articles",
         hover_name="label",
         hover_data={"grade": True, "composite_risk": ":.2f", "articles": True},
         labels={
@@ -258,57 +232,157 @@ def _render_scatter(df: pd.DataFrame) -> None:
             "sensationalism": "Sensationalism",
             "composite_risk": "Risk",
         },
-        title="Sentiment Extremity vs Sensationalism (bubble size = article count)",
+        title="Sentiment Extremity vs Sensationalism (bubble = article count)",
     )
     fig.update_layout(margin=dict(l=0, r=0, t=40, b=20), height=380)
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ── topic table ───────────────────────────────────────────────────────────────
+# ── Person B panel ────────────────────────────────────────────────────────────
 
-def _render_topic_table(df: pd.DataFrame) -> None:
-    st.subheader("Topic Scores")
+def _render_person_b_panel(df: pd.DataFrame) -> None:
+    scored = df[df["composite_risk"].notna()].copy()
 
-    display_cols = {
-        "topic":                  "Topic",
-        "articles":               "Articles",
-        "composite_risk":         "Risk",
-        "sentiment_extremity":    "Sentiment",
-        "sensationalism":         "Sensationalism",
-        "framing_inconsistency":  "Framing gap",
-        "avg_trust":              "Avg trust",
-        "coverage_ratio":         "Coverage ratio",
-    }
-    available = {k: v for k, v in display_cols.items() if k in df.columns}
-    table_df = df[list(available.keys())].rename(columns=available).copy()
-
-    float_cols = [v for k, v in available.items() if k not in ("topic", "articles")]
-    for col in float_cols:
-        if col in table_df.columns:
-            table_df[col] = table_df[col].apply(
-                lambda x: f"{x:.3f}" if pd.notna(x) else "—"
-            )
-
-    st.dataframe(table_df, use_container_width=True, hide_index=True)
-
-
-# ── high-risk callout ─────────────────────────────────────────────────────────
-
-def _render_high_risk_callout(df: pd.DataFrame) -> None:
-    if "composite_risk" not in df.columns:
+    if scored.empty:
+        st.info(
+            "No composite risk scores yet. "
+            "Run `python src/scoring/compute_scores.py` to populate."
+        )
         return
-    flagged = df[df["composite_risk"] >= _HIGH_RISK].sort_values(
-        "composite_risk", ascending=False
+
+    # Risk alert
+    flagged = scored[scored["composite_risk"] >= _HIGH_RISK]
+    if not flagged.empty:
+        lines = "  \n".join(
+            f"- **{row['topic']}** — Grade {row['grade']}, risk {row['composite_risk']:.3f}"
+            for _, row in flagged.iterrows()
+        )
+        st.error(
+            f"**{len(flagged)} topic(s) flagged as potential misinformation** "
+            f"(composite risk ≥ {_HIGH_RISK}):\n\n{lines}"
+        )
+    else:
+        st.success("No topics currently exceed the misinformation risk threshold.")
+
+    st.markdown("---")
+
+    # Topic table
+    st.subheader("Topic reliability table")
+    table_df = scored[[
+        "topic", "grade", "reliability_pct", "avg_trust",
+        "trust_variance", "coverage_breadth", "coverage_ratio_pct",
+        "composite_risk", "articles",
+    ]].rename(columns={
+        "topic":              "Topic",
+        "grade":              "Grade",
+        "reliability_pct":    "Reliability %",
+        "avg_trust":          "Avg Trust",
+        "trust_variance":     "Trust Variance",
+        "coverage_breadth":   "Credible Domains",
+        "coverage_ratio_pct": "Coverage %",
+        "composite_risk":     "Composite Risk",
+        "articles":           "Articles",
+    })
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Reliability %":  st.column_config.NumberColumn(format="%.1f"),
+            "Avg Trust":      st.column_config.NumberColumn(format="%.1f"),
+            "Trust Variance": st.column_config.NumberColumn(format="%.2f"),
+            "Coverage %":     st.column_config.NumberColumn(format="%.1f"),
+            "Composite Risk": st.column_config.ProgressColumn(
+                format="%.4f", min_value=0.0, max_value=1.0
+            ),
+        },
     )
-    if flagged.empty:
-        return
 
-    st.error(f"**{len(flagged)} high-risk topic(s) detected** (risk ≥ {_HIGH_RISK})")
-    for _, row in flagged.iterrows():
-        risk = row["composite_risk"]
-        grade = grade_topic(risk)
-        label = _truncate(row["topic"], 80)
-        st.markdown(f"- **{grade}** `{risk:.2f}` — {label}")
+    st.markdown("---")
+
+    # Charts
+    col_bar, col_scatter = st.columns(2)
+
+    with col_bar:
+        st.subheader("Composite risk by topic")
+        bar_df = scored.sort_values("composite_risk", ascending=True)
+        fig_bar = go.Figure(go.Bar(
+            x=bar_df["composite_risk"],
+            y=bar_df["topic"],
+            orientation="h",
+            marker_color=[_GRADE_COLOUR[g] for g in bar_df["grade"]],
+            text=bar_df["grade"],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Composite risk: %{x:.4f}<br>"
+                "Grade: %{text}<extra></extra>"
+            ),
+        ))
+        fig_bar.add_vline(
+            x=_HIGH_RISK, line_dash="dash", line_color="#e74c3c",
+            annotation_text=f"Threshold ({_HIGH_RISK})",
+            annotation_position="top right",
+        )
+        fig_bar.update_layout(
+            xaxis=dict(title="Composite risk", range=[0, 1.05]),
+            yaxis_title=None,
+            margin=dict(l=0, r=50, t=20, b=40),
+            height=max(320, len(scored) * 44),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with col_scatter:
+        st.subheader("Source trust vs credible coverage")
+        fig_sc = px.scatter(
+            scored,
+            x="avg_trust",
+            y="coverage_ratio_pct",
+            size="bubble_size",
+            color="composite_risk",
+            color_continuous_scale="RdYlGn_r",
+            range_color=[0, 1],
+            hover_name="topic",
+            hover_data={
+                "grade":              True,
+                "avg_trust":          ":.1f",
+                "coverage_ratio_pct": ":.1f",
+                "coverage_breadth":   True,
+                "composite_risk":     ":.4f",
+                "bubble_size":        False,
+            },
+            labels={
+                "avg_trust":          "Avg source trust (0–100)",
+                "coverage_ratio_pct": "Credible domain coverage (%)",
+                "composite_risk":     "Composite risk",
+            },
+            size_max=32,
+        )
+        fig_sc.update_layout(
+            margin=dict(l=0, r=0, t=20, b=40),
+            height=max(320, len(scored) * 44),
+            coloraxis_colorbar=dict(title="Risk"),
+        )
+        st.plotly_chart(fig_sc, use_container_width=True)
+
+    # Grade legend
+    st.markdown("---")
+    with st.expander("Grade scale reference"):
+        leg_cols = st.columns(5)
+        for i, (grade, desc) in enumerate([
+            ("A", "Reliability ≥ 80%"),
+            ("B", "Reliability 60–79%"),
+            ("C", "Reliability 40–59%"),
+            ("D", "Reliability 20–39%"),
+            ("F", "Reliability < 20%"),
+        ]):
+            leg_cols[i].markdown(
+                f"<div style='background:{_GRADE_COLOUR[grade]};padding:8px;"
+                f"border-radius:6px;text-align:center'>"
+                f"<b>{grade}</b><br><small>{desc}</small></div>",
+                unsafe_allow_html=True,
+            )
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -322,9 +396,10 @@ def main() -> None:
     )
 
     db_path = _sidebar()
-    df = load_scored_topics(str(db_path))
+    df = load_scored_topics(db_path)
 
-    st.title("Hot Topics Misinformation Dashboard")
+    st.title("🔍 Hot Topics Misinformation Dashboard")
+
     if df.empty:
         _render_empty(db_path)
         return
@@ -339,15 +414,10 @@ def main() -> None:
     with tab_a:
         _render_person_a_charts(df)
         st.markdown("---")
-        _render_scatter(df)
-        st.markdown("---")
-        _render_topic_table(df)
+        _render_sentiment_scatter(df)
 
     with tab_b:
-        st.info(
-            "Person B panel — source trust, coverage breadth, and composite risk "
-            "breakdown will be implemented here."
-        )
+        _render_person_b_panel(df)
 
 
 if __name__ == "__main__":
