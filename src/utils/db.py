@@ -109,6 +109,8 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             avg_sentiment_extremity REAL,
             sensationalism_avg      REAL,
             framing_inconsistency   REAL,
+            attribution_vagueness   REAL,
+            fact_inconsistency      REAL,
             composite_risk          REAL,
             computed_at             TEXT
         )
