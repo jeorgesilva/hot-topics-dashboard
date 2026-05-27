@@ -87,7 +87,12 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 (SELECT GROUP_CONCAT(DISTINCT ri.platform)
                  FROM topic_sources ts2
                  JOIN raw_items ri ON ri.id = ts2.item_id
-                 WHERE ts2.topic_id = t.id) AS platforms
+                 WHERE ts2.topic_id = t.id) AS platforms,
+                (SELECT GROUP_CONCAT(ri.keywords_json, '||')
+                 FROM topic_sources ts2
+                 JOIN raw_items ri ON ri.id = ts2.item_id
+                 WHERE ts2.topic_id = t.id
+                   AND ri.keywords_json IS NOT NULL) AS keywords_raw
             FROM topics t
             LEFT JOIN topic_scores ts ON t.id = ts.topic_id
             ORDER BY ts.composite_risk DESC NULLS LAST, t.created_at DESC
@@ -184,6 +189,24 @@ def _truncate(label: str, n: int = 55) -> str:
     return label if len(label) <= n else label[:n] + "…"
 
 
+def _parse_keywords(keywords_raw: str | None, n: int = 5) -> list[str]:
+    """Flatten and deduplicate keywords from a '||'-joined list of JSON arrays."""
+    if not keywords_raw:
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for chunk in keywords_raw.split("||"):
+        try:
+            for kw in json.loads(chunk):
+                key = str(kw).lower().strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    result.append(str(kw).strip())
+        except Exception:
+            pass
+    return result[:n]
+
+
 def _platform_icons(platforms_str: str | None) -> str:
     if not platforms_str:
         return ""
@@ -246,15 +269,30 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
         )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Topics analysed", len(df))
-    c2.metric("High-risk topics", int(len(flagged)), help=f"composite_risk ≥ {_HIGH_RISK}")
+    c1.metric(
+        "Topics analysed", len(df),
+        help="Total number of unique topic clusters identified in the scraped articles. "
+             "Each cluster groups articles about the same subject.",
+    )
+    c2.metric(
+        "High-risk topics", int(len(flagged)),
+        help=f"Topics whose composite risk score exceeds {_HIGH_RISK} (50%). "
+             "These are likely misinformation vectors based on source trust, sentiment, "
+             "framing divergence and sensationalism signals.",
+    )
     c3.metric(
         "Avg source trust",
         f"{scored['avg_trust'].mean():.1f} / 100" if not scored.empty else "—",
+        help="Mean trust score (0–100) across all scored articles, based on Media Bias/Fact Check "
+             "(MBFC) ratings. Scores ≥ 60 = credible, 40–59 = neutral, < 40 = unreliable.",
     )
     c4.metric(
         "Avg composite risk",
-        f"{scored['composite_risk'].mean():.3f}" if not scored.empty else "—",
+        f"{scored['composite_risk'].mean():.1%}" if not scored.empty else "—",
+        help="Weighted average of 7 NLP and coverage signals across all scored topics. "
+             "Formula: 25% source distrust + 20% sentiment + 20% low coverage + "
+             "15% framing divergence + 10% sensationalism + 5% attribution vagueness + "
+             "5% fact inconsistency. Higher % = more misinformation risk.",
     )
 
     st.markdown("---")
@@ -285,27 +323,34 @@ def _render_topic_card(row: pd.Series) -> None:
     grade_colour = _GRADE_COLOUR.get(grade, "#999")
     icons = _platform_icons(platforms_str)
     risk_str = _risk_badge_html(risk) if risk is not None else "<em style='color:#aaa'>unscored</em>"
+    keywords = _parse_keywords(row.get("keywords_raw"))
+    kw_section = "".join(
+        f"<span style='background:#1a1a1a;color:#ccc;border:1px solid #444;"
+        f"border-radius:3px;padding:1px 6px;font-size:0.72em;margin-right:4px'>{kw}</span>"
+        for kw in keywords
+    )
+    kw_row = f"<div style='margin-top:5px'>{kw_section}</div>" if kw_section else ""
+    bar_inner = f"<div style='background:{grade_colour};height:100%;width:{reliability_pct:.1f}%'></div>"
+    bar = f"<div style='background:#333;border-radius:4px;height:5px;overflow:hidden'>{bar_inner}</div>"
+    rel_label = f"<span style='font-size:0.75em;color:#aaa'>Reliability {reliability_pct:.1f}%</span>"
+    title_row = (
+        f"{_grade_badge_html(grade)}"
+        f"<strong style='font-size:1.0em;color:#fff;margin-left:8px'>{_truncate(topic, 70)}</strong>"
+        f"<span style='color:#aaa;font-size:0.85em;margin-left:8px'>{articles} articles &nbsp;{icons}</span>"
+        f"<span style='margin-left:auto'>Risk: {risk_str}</span>"
+    )
+    card_html = (
+        f"<div style='border-left:4px solid {grade_colour};padding:10px 16px;"
+        f"margin-bottom:6px;background:#000;border-radius:0 6px 6px 0'>"
+        f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>{title_row}</div>"
+        f"{kw_row}"
+        f"<div style='margin-top:8px'>{bar}{rel_label}</div>"
+        f"</div>"
+    )
 
     col_card, col_nav = st.columns([11, 1])
     with col_card:
-        st.markdown(
-            f"""<div style='border-left:4px solid {grade_colour};padding:10px 16px;
-            margin-bottom:6px;background:#000;border-radius:0 6px 6px 0'>
-              <div style='display:flex;align-items:center;gap:12px;flex-wrap:wrap'>
-                {_grade_badge_html(grade)}
-                <strong style='font-size:1.0em;color:#fff'>{_truncate(topic, 70)}</strong>
-                <span style='color:#aaa;font-size:0.85em'>{articles} articles &nbsp;{icons}</span>
-                <span style='margin-left:auto'>Risk: {risk_str}</span>
-              </div>
-              <div style='margin-top:8px'>
-                <div style='background:#333;border-radius:4px;height:5px;overflow:hidden'>
-                  <div style='background:{grade_colour};height:100%;width:{reliability_pct:.1f}%'></div>
-                </div>
-                <span style='font-size:0.75em;color:#aaa'>Reliability {reliability_pct:.1f}%</span>
-              </div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+        st.markdown(card_html, unsafe_allow_html=True)
     with col_nav:
         if st.button("→", key=f"nav_t_{topic_id}", help="View topic"):
             st.query_params["view"] = "topic"
@@ -360,13 +405,14 @@ def _render_risk_bar(df: pd.DataFrame) -> None:
     )
     fig.update_layout(
         title="Composite Risk by Topic",
-        xaxis=dict(title="Composite risk", range=[0, 1.05]),
+        xaxis=dict(title="Composite risk (0–100%)", range=[0, 1.05]),
         yaxis_title=None,
         margin=dict(l=0, r=50, t=40, b=20),
         height=max(280, len(plot_df) * 40),
         showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption("Only topics that have been fully scored (NLP pipeline completed) appear here.")
 
 
 # ── topic detail view ─────────────────────────────────────────────────────────
@@ -403,7 +449,7 @@ def render_topic(topic_id: int, db_path: str) -> None:
         )
         if risk is not None:
             st.caption(
-                f"Composite risk: **{risk:.4f}** &nbsp;·&nbsp; "
+                f"Composite risk: **{risk * 100:.1f}%** &nbsp;·&nbsp; "
                 f"{articles} articles &nbsp;·&nbsp; {icons} &nbsp;·&nbsp; "
                 f"scored {computed_at}"
             )
@@ -433,8 +479,42 @@ def render_topic(topic_id: int, db_path: str) -> None:
             _render_article_row(a, topic_id)
 
 
+_SIGNAL_TOOLTIPS: dict[str, str] = {
+    "Source Distrust": (
+        "Measures how much of this topic's coverage comes from low-trust sources. "
+        "Weight: 25% of composite risk. "
+        "High % = most articles come from unreliable outlets. "
+        "Based on MBFC trust scores (0–100) per domain."
+    ),
+    "Sentiment Extremity": (
+        "Average emotional intensity of articles — how far sentiment deviates from neutral. "
+        "Weight: 20% of composite risk. "
+        "High % = articles use strongly polarised, emotionally charged language. "
+        "Computed by a RoBERTa sentiment model (|positive − negative| probability)."
+    ),
+    "Low Coverage": (
+        "Fraction of the topic's coverage that comes from non-credible domains. "
+        "Weight: 20% of composite risk. "
+        "High % = story only covered by low-trust outlets, a classic misinformation pattern."
+    ),
+    "Framing Divergence": (
+        "How differently high-trust vs low-trust sources frame the same topic. "
+        "Weight: 15% of composite risk. "
+        "Measured as cosine distance between MiniLM embeddings of the two source tiers. "
+        "High % = credible and unreliable sources tell very different stories."
+    ),
+    "Sensationalism": (
+        "Density of ALL-CAPS words, exclamation marks, loaded terms (e.g. 'bombshell', "
+        "'shocking') and clickbait patterns across all articles. "
+        "Weight: 10% of composite risk. "
+        "High % = strong sensationalist rhetoric."
+    ),
+}
+
+
 def _render_score_breakdown(row: pd.Series) -> None:
     st.subheader("Signal Breakdown")
+    st.caption("Hover over each card for a full explanation of the signal.")
     risk = float(row.get("composite_risk", 0) or 0)
     avg_trust = float(row.get("avg_trust", 50) or 50)
     sentiment = float(row.get("sentiment_extremity", 0) or 0)
@@ -442,45 +522,57 @@ def _render_score_breakdown(row: pd.Series) -> None:
     framing = float(row.get("framing_inconsistency", 0) or 0)
     sensationalism = float(row.get("sensationalism", 0) or 0)
 
-    contributions = {
-        "🏛️ Source\nDistrust": (
+    signals = [
+        (
+            "🏛️ Source Distrust",
             _WEIGHTS["avg_trust"] * (1.0 - avg_trust / 100.0),
             _WEIGHTS["avg_trust"],
-            f"{avg_trust:.1f}/100 trust",
+            f"avg trust {avg_trust:.1f}%",
+            _SIGNAL_TOOLTIPS["Source Distrust"],
         ),
-        "😤 Sentiment\nExtremity": (
+        (
+            "😤 Sentiment Extremity",
             _WEIGHTS["avg_sentiment_extremity"] * sentiment,
             _WEIGHTS["avg_sentiment_extremity"],
-            f"score {sentiment:.3f}",
+            f"signal {sentiment * 100:.1f}%",
+            _SIGNAL_TOOLTIPS["Sentiment Extremity"],
         ),
-        "📡 Low\nCoverage": (
+        (
+            "📡 Low Coverage",
             _WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),
             _WEIGHTS["coverage_ratio"],
-            f"{coverage_ratio * 100:.1f}% credible",
+            f"{coverage_ratio * 100:.1f}% credible domains",
+            _SIGNAL_TOOLTIPS["Low Coverage"],
         ),
-        "🔀 Framing\nDivergence": (
+        (
+            "🔀 Framing Divergence",
             _WEIGHTS["framing_inconsistency"] * framing,
             _WEIGHTS["framing_inconsistency"],
-            f"score {framing:.3f}",
+            f"signal {framing * 100:.1f}%",
+            _SIGNAL_TOOLTIPS["Framing Divergence"],
         ),
-        "📢 Sensational-\nism": (
+        (
+            "📢 Sensationalism",
             _WEIGHTS["sensationalism_avg"] * sensationalism,
             _WEIGHTS["sensationalism_avg"],
-            f"score {sensationalism:.3f}",
+            f"signal {sensationalism * 100:.1f}%",
+            _SIGNAL_TOOLTIPS["Sensationalism"],
         ),
-    }
+    ]
 
     cols = st.columns(5)
-    for col, (label, (contribution, weight, detail)) in zip(cols, contributions.items()):
-        pct = (contribution / risk * 100) if risk > 0 else 0.0
+    for col, (label, contribution, weight, detail, tooltip) in zip(cols, signals):
+        share_pct = (contribution / risk * 100) if risk > 0 else 0.0
         c = "#e74c3c" if contribution > 0.10 else "#e67e22" if contribution > 0.05 else "#2ecc71"
         col.markdown(
-            f"""<div style='border:1px solid #dee2e6;border-radius:8px;padding:12px;
-            text-align:center;min-height:120px'>
-              <div style='font-size:0.78em;color:#555;white-space:pre-line;margin-bottom:4px'>{label}</div>
-              <div style='font-size:1.6em;font-weight:bold;color:{c}'>{contribution:.3f}</div>
+            f"""<div title="{tooltip}" style='border:1px solid #dee2e6;border-radius:8px;
+            padding:12px;text-align:center;min-height:130px;cursor:help'>
+              <div style='font-size:0.78em;color:#555;margin-bottom:4px'>{label}</div>
+              <div style='font-size:1.6em;font-weight:bold;color:{c}'>{contribution * 100:.1f}%</div>
               <div style='font-size:0.75em;color:#888'>{detail}</div>
-              <div style='font-size:0.68em;color:#aaa;margin-top:4px'>w={weight} · {pct:.0f}% of risk</div>
+              <div style='font-size:0.68em;color:#aaa;margin-top:4px'>
+                weight {weight * 100:.0f}% · {share_pct:.0f}% of total risk
+              </div>
             </div>""",
             unsafe_allow_html=True,
         )
@@ -523,6 +615,11 @@ def _render_radar(row: pd.Series) -> None:
         title=dict(text="Risk Radar", x=0.5),
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Each axis shows a risk signal normalised to 0–100%. "
+        "A larger filled area means higher overall misinformation risk. "
+        "Hover over a point to see its exact value."
+    )
 
 
 def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
@@ -558,13 +655,18 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
     ))
     fig.update_layout(
         title=dict(text="Domain Trust Scores", x=0.5),
-        xaxis=dict(title="Trust (0–100)", range=[0, 100]),
+        xaxis=dict(title="Trust score (0–100)", range=[0, 100]),
         yaxis=dict(tickfont=dict(size=10)),
         margin=dict(l=0, r=10, t=50, b=20),
         height=300,
         showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Trust scores from Media Bias/Fact Check (MBFC). "
+        "🟢 ≥ 60 = credible · 🟠 40–59 = neutral · 🔴 < 40 = unreliable. "
+        "High divergence between green and red bars is a misinformation signal."
+    )
 
 
 def _render_article_row(article: dict, topic_id: int) -> None:
@@ -648,9 +750,8 @@ def render_article(item_id: str, db_path: str) -> None:
     st.markdown(f"## {icon} [{title}]({url})")
     st.caption(f"**{source}** &nbsp;·&nbsp; {timestamp} &nbsp;·&nbsp; {platform}")
 
-    if description:
-        with st.expander("Description"):
-            st.write(description)
+    with st.expander("Description", expanded=True):
+        st.write(cleaned_text or description or "*No text available.*")
 
     st.markdown("---")
     st.subheader("Signal Analysis")
@@ -672,11 +773,6 @@ def render_article(item_id: str, db_path: str) -> None:
     _render_gauge(col2, "Attribution Vagueness", attr_score)
     _render_gauge(col3, "Clickbait Patterns", click_score)
     _render_gauge(col4, "ALL-CAPS Density", caps_score)
-
-    if cleaned_text:
-        st.markdown("---")
-        with st.expander("Cleaned text"):
-            st.text(cleaned_text)
 
 
 def _render_gauge(container, title: str, value: float) -> None:
