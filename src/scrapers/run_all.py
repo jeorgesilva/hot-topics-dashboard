@@ -24,7 +24,7 @@ from itertools import combinations
 from pathlib import Path
 
 from src.scrapers.google_rss_scraper import scrape_google_trends
-from src.scrapers.newsapi_scraper import scrape_newsapi
+from src.scrapers.newsapi_scraper import NewsAPIQuotaError, scrape_newsapi
 from src.utils.db import init_db, insert_items
 from src.utils.models import RawItem
 
@@ -47,7 +47,7 @@ _DE_STOPWORDS = frozenset({
 })
 
 # Delay between consecutive NewsAPI calls for the same topic (free tier safety).
-_INTER_QUERY_DELAY_S: float = 0.5
+_INTER_QUERY_DELAY_S: float = 1.0
 
 # Hard cap on NewsAPI calls per topic. With 15 topics × 6 calls = 90 requests/day,
 # safely under the free-tier limit of 100 requests/day.
@@ -172,6 +172,9 @@ def _fetch_articles_for_topic(
                 language=language,
                 max_articles=fetch_size,
             )
+        except NewsAPIQuotaError:
+            logger.error("    NewsAPI quota exhausted — aborting pipeline")
+            raise
         except Exception:
             logger.exception("    NewsAPI failed for query %r — skipping", query)
             calls += 1
@@ -205,19 +208,28 @@ def _fetch_articles_for_topic(
 def run_pipeline(
     geo: str = "DE",
     language: str = "de",
-    max_topics: int = 20,
+    rss_candidates: int = 25,
+    target_topics: int = 10,
     articles_per_topic: int = 100,
     db_path: str | Path | None = None,
 ) -> dict:
     """Run the full scrape + topic-linking pipeline.
 
+    Fetches rss_candidates headlines from Google RSS, then tries to collect
+    articles_per_topic articles for each. Only topics that reach the full
+    articles_per_topic count are kept; the rest are dropped. Collection stops
+    as soon as target_topics qualifying topics have been found.
+
     Args:
         geo: Google News country code (default "DE" = Germany).
         language: NewsAPI language code (default "de" = German).
-        max_topics: Maximum number of trending topics from Google RSS.
-        articles_per_topic: Target articles per topic. The fetcher retries with
-            alternative queries until this count is reached or API call budget
-            is exhausted (default 100).
+        rss_candidates: How many RSS headlines to fetch as candidates.
+            Should be well above target_topics to ensure enough qualify.
+        target_topics: Exact number of topics to publish to the dashboard.
+            Topics that cannot reach articles_per_topic are dropped.
+        articles_per_topic: Required article count per topic (default 100).
+            Topics with fewer articles after all query variants are exhausted
+            are discarded so every published topic has a full sample.
         db_path: SQLite database path. Defaults to data/dashboard.db.
 
     Returns:
@@ -226,11 +238,11 @@ def run_pipeline(
     conn = init_db(db_path)
     now = datetime.now(timezone.utc).isoformat()
 
-    # ── Step 1: Google RSS → topic seeds ──────────────────────────────────────
+    # ── Step 1: Google RSS → candidate seeds ──────────────────────────────────
     logger.info("=" * 60)
-    logger.info("Step 1 — Google News RSS (geo=%s)", geo)
+    logger.info("Step 1 — Google News RSS (geo=%s, candidates=%d)", geo, rss_candidates)
     logger.info("=" * 60)
-    rss_seeds = scrape_google_trends(geo=geo, max_items=max_topics)
+    rss_seeds = scrape_google_trends(geo=geo, max_items=rss_candidates)
     logger.info("  %d trending headlines fetched", len(rss_seeds))
 
     if not rss_seeds:
@@ -245,41 +257,60 @@ def run_pipeline(
     conn.commit()
 
     topics_created = 0
+    topics_dropped = 0
     articles_inserted = 0
     total_fetched = 0
 
     # ── Steps 2 + 3: per-topic query variants + NewsAPI fetch ─────────────────
-    for topic_idx, seed in enumerate(rss_seeds, start=1):
+    for seed_idx, seed in enumerate(rss_seeds, start=1):
+        if topics_created >= target_topics:
+            logger.info("  Target of %d topics reached — stopping early.", target_topics)
+            break
+
         headline = seed["title"]
         variants = _generate_query_variants(headline)
 
         logger.info(
             "  [%2d/%2d] %s",
-            topic_idx, len(rss_seeds),
+            seed_idx, len(rss_seeds),
             headline[:70],
         )
-        logger.info("           %d query variants generated", len(variants))
-
-        articles = _fetch_articles_for_topic(
-            headline=headline,
-            language=language,
-            target_count=articles_per_topic,
+        logger.info(
+            "           %d query variants | need %d more topics",
+            len(variants), target_topics - topics_created,
         )
+
+        try:
+            articles = _fetch_articles_for_topic(
+                headline=headline,
+                language=language,
+                target_count=articles_per_topic,
+            )
+        except NewsAPIQuotaError:
+            logger.error(
+                "  NewsAPI quota exhausted after %d topics. "
+                "Quota resets at midnight UTC.",
+                topics_created,
+            )
+            break
 
         total_fetched += len(articles)
 
-        if not articles:
-            logger.info("    0 articles found — skipping topic")
+        if len(articles) < articles_per_topic:
+            topics_dropped += 1
+            logger.info(
+                "    ✗ dropped — only %d/%d articles (topic needs full sample)",
+                len(articles), articles_per_topic,
+            )
             continue
 
-        # Persist topic
-        topic_id = topic_idx
+        # Persist qualifying topic (sequential id among accepted topics)
+        topic_id = topics_created + 1
         conn.execute(
             "INSERT OR REPLACE INTO topics (id, label, created_at, item_count) VALUES (?, ?, ?, ?)",
             (topic_id, headline[:255], now, len(articles)),
         )
 
-        # Persist articles + link to topic
         inserted = insert_items(conn, articles)
         articles_inserted += inserted
 
@@ -291,8 +322,8 @@ def run_pipeline(
 
         topics_created += 1
         logger.info(
-            "    ✓ topic_id=%d  articles=%d  new=%d",
-            topic_id, len(articles), inserted,
+            "    ✓ topic_id=%d  articles=%d  new=%d  (%d/%d done)",
+            topic_id, len(articles), inserted, topics_created, target_topics,
         )
 
     conn.close()
@@ -300,7 +331,8 @@ def run_pipeline(
     logger.info("")
     logger.info("=" * 60)
     logger.info("PIPELINE COMPLETE")
-    logger.info("  Topics created  : %d", topics_created)
+    logger.info("  Topics published: %d / %d target", topics_created, target_topics)
+    logger.info("  Topics dropped  : %d (insufficient articles)", topics_dropped)
     logger.info("  Articles fetched: %d", total_fetched)
     logger.info("  Articles new    : %d", articles_inserted)
     logger.info("=" * 60)
@@ -308,6 +340,7 @@ def run_pipeline(
     return {
         "rss_seeds": len(rss_seeds),
         "topics_created": topics_created,
+        "topics_dropped": topics_dropped,
         "articles_fetched": total_fetched,
         "articles_inserted": articles_inserted,
     }
@@ -317,10 +350,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Hot Topics scraper pipeline.")
     parser.add_argument("--geo", default="DE", help="Google News country code (default: DE)")
     parser.add_argument("--language", default="de", help="NewsAPI language (default: de)")
-    parser.add_argument("--max-topics", type=int, default=20, help="Max RSS topics (default: 20)")
+    parser.add_argument(
+        "--rss-candidates", type=int, default=25,
+        help="RSS headlines to fetch as candidates (default: 25)",
+    )
+    parser.add_argument(
+        "--target-topics", type=int, default=10,
+        help="Exact number of topics to publish — topics below article threshold are dropped (default: 10)",
+    )
     parser.add_argument(
         "--articles-per-topic", type=int, default=100,
-        help="Target articles per topic — retries with alternative queries until reached (default: 100)",
+        help="Required articles per topic — topics that fall short are dropped (default: 100)",
     )
     parser.add_argument("--db-path", default=None, help="SQLite DB path")
     args = parser.parse_args()
@@ -334,7 +374,8 @@ def main() -> None:
     run_pipeline(
         geo=args.geo,
         language=args.language,
-        max_topics=args.max_topics,
+        rss_candidates=args.rss_candidates,
+        target_topics=args.target_topics,
         articles_per_topic=args.articles_per_topic,
         db_path=args.db_path,
     )
