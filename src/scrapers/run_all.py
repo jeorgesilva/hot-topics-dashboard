@@ -178,6 +178,7 @@ def _fetch_articles_for_topic(
     language: str,
     target_count: int,
     pool: dict[str, RawItem] | None = None,
+    skip_newsapi: bool = False,
 ) -> list[RawItem]:
     """Fetch up to target_count unique articles for a topic.
 
@@ -189,6 +190,7 @@ def _fetch_articles_for_topic(
         language: NewsAPI language code (e.g. "de").
         target_count: Desired number of articles (e.g. 100).
         pool: Pre-built article pool from RSS/Reddit (optional).
+        skip_newsapi: If True, only pool articles are used (no API calls).
 
     Returns:
         List of unique RawItem dicts, at most target_count items.
@@ -207,6 +209,9 @@ def _fetch_articles_for_topic(
             "    pool match: %d/%d articles (candidates=%s)",
             len(collected), target_count, candidates[:5],
         )
+
+    if skip_newsapi:
+        return list(collected.values())[:target_count]
 
     # Phase 2: supplement with NewsAPI
     variants = _generate_query_variants(headline)
@@ -273,6 +278,7 @@ def run_pipeline(
     rss_pool_days_back: int = 7,
     rss_pool_max_per_feed: int = 20,
     reddit_limit_per_sub: int = 25,
+    skip_newsapi: bool = False,
 ) -> dict:
     """Run the full scrape + topic-linking pipeline.
 
@@ -291,6 +297,7 @@ def run_pipeline(
         rss_pool_days_back: Days back to fetch for the RSS/Reddit pool.
         rss_pool_max_per_feed: Max articles per RSS feed for the pool.
         reddit_limit_per_sub: Max posts per subreddit for the pool.
+        skip_newsapi: If True, skip all NewsAPI calls (pool-only mode).
 
     Returns:
         Summary dict with counts.
@@ -353,6 +360,7 @@ def run_pipeline(
                 language=language,
                 target_count=articles_per_topic,
                 pool=pool,
+                skip_newsapi=skip_newsapi,
             )
         except NewsAPIQuotaError:
             logger.error(
@@ -463,6 +471,10 @@ def main() -> None:
         "--reddit-limit-per-sub", type=int, default=25,
         help="Max posts per subreddit for pool (default: 25)",
     )
+    parser.add_argument(
+        "--no-newsapi", action="store_true",
+        help="Skip all NewsAPI calls — use only RSS/Reddit pool (useful when quota is exhausted)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -481,6 +493,7 @@ def main() -> None:
         rss_pool_days_back=args.rss_pool_days_back,
         rss_pool_max_per_feed=args.rss_pool_max_per_feed,
         reddit_limit_per_sub=args.reddit_limit_per_sub,
+        skip_newsapi=args.no_newsapi,
     )
 
 
