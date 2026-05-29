@@ -13,49 +13,79 @@ _pipeline = None
 # Expanded from 18 to ~80 single-word terms grouped by semantic category.
 # Multi-word patterns are handled separately by _CLICKBAIT_PATTERNS.
 _SENSATIONAL_TERMS: frozenset[str] = frozenset({
-    # Urgency / Breaking
+    # Urgency / Breaking (EN + DE)
     "breaking", "urgent", "alert", "developing", "exclusive",
     "emergency", "flash", "live",
-    # Conspiracy / Cover-up
+    "exklusiv", "dringend", "dringlich", "eilmeldung", "breaking",
+    "sofortmeldung", "aktuell",
+    # Conspiracy / Cover-up (EN + DE)
     "conspiracy", "coverup", "cover-up", "censored", "suppressed",
     "whistleblower", "plandemic", "scamdemic", "globalist", "banned",
     "shadowbanned", "deepstate",
-    # Revelation / Exposure
+    "verschwörung", "verschwörungstheorie", "zensiert", "unterdrückt",
+    "globalist", "tiefer staat", "verbotene",
+    # Revelation / Exposure (EN + DE)
     "exposed", "leaked", "revealed", "uncovered", "bombshell", "explosive",
     "damning", "incriminating", "scandalous",
-    # Fear / Catastrophe
+    "enthüllt", "enthüllung", "geleakt", "aufgedeckt", "enthüllte",
+    "bombe", "sprengstoff", "skandalös", "belastend",
+    # Fear / Catastrophe (EN + DE)
     "catastrophic", "devastating", "alarming", "terrifying", "horrifying",
     "crisis", "collapse", "apocalyptic", "existential", "annihilation",
     "extinction",
-    # Outrage / Scandal
+    "katastrophal", "katastrophe", "verheerend", "alarmierend",
+    "erschreckend", "schockierend", "krise", "kollaps", "apokalyptisch",
+    "vernichtend", "auslöschung",
+    # Outrage / Scandal (EN + DE)
     "outrage", "scandal", "shocking", "disgrace", "disgusting",
     "appalling", "unbelievable", "stunning", "staggering", "outrageous",
     "unthinkable", "despicable",
-    # Medical misinformation
+    "skandal", "schande", "empörend", "unglaublich", "unvorstellbar",
+    "abscheulich", "ungeheuerlich", "entsetzlich", "unfassbar",
+    # Medical misinformation (EN + DE)
     "hoax", "depopulation", "miracle",
-    # Political sensationalism
+    "hoax", "entvölkerung", "wunder", "heilmittel", "geheimmittel",
+    # Political sensationalism (EN + DE)
     "treason", "traitor", "traitors", "coup", "rigged", "stolen",
     "overthrow",
-    # Deception
+    "verrat", "verräter", "putsch", "gestohlen", "manipuliert",
+    "wahlbetrug", "umsturz",
+    # Deception (EN + DE)
     "lied", "lying", "liar", "liars", "deceived", "deceiving",
     "fabricated", "falsified", "manipulation",
-    # Superlatives / Hyperbole
+    "gelogen", "lüge", "lügner", "betrug", "täuschung", "gefälscht",
+    "erfunden", "manipulation", "desinformation",
+    # Superlatives / Hyperbole (EN + DE)
     "unprecedented", "unimaginable", "mind-blowing", "earth-shattering",
     "jaw-dropping",
+    "beispiellos", "noch nie dagewesen", "rekord", "historisch",
+    "welterschütternd", "bahnbrechend",
 })
 
 # ── Structural clickbait patterns ─────────────────────────────────────────────
 # Regex patterns that detect manipulation framings independent of individual
 # word choices. Compiled once at import time for performance.
 _CLICKBAIT_PATTERNS: tuple[re.Pattern, ...] = (
-    re.compile(r"you won(?:'|’)?t believe", re.IGNORECASE),
+    # English patterns
+    re.compile(r"you won(?:’|’)?t believe", re.IGNORECASE),
     re.compile(r"the (real|true|hidden|secret|shocking) (reason|truth|story)", re.IGNORECASE),
-    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:'|’)?t want you", re.IGNORECASE),
+    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:’|’)?t want you", re.IGNORECASE),
     re.compile(r"is .{3,40}(hiding|lying|corrupt\b|guilty\b)", re.IGNORECASE),
     re.compile(r"\d+\s+(things?|reasons?|ways?|facts?|secrets?).{0,25}(shocking|amaz|unbeliev|crazy|wild)", re.IGNORECASE),
     re.compile(r"(finally|now|just)\s+(revealed|exposed|confirmed|proven|admitted)", re.IGNORECASE),
-    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:'|’)?t|ignor)", re.IGNORECASE),
-    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:'|’)?t|won(?:'|’)?t|refuse to)", re.IGNORECASE),
+    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:’|’)?t|ignor)", re.IGNORECASE),
+    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:’|’)?t|won(?:’|’)?t|refuse to)", re.IGNORECASE),
+    # German patterns
+    re.compile(r"das wollen sie nicht", re.IGNORECASE),                              # "they don’t want you to know"
+    re.compile(r"(das|das ist) der (wahre?|eigentliche?|geheime?) grund", re.IGNORECASE),  # "the real reason"
+    re.compile(r"(endlich|jetzt|soeben)\s+(enthüllt|bestätigt|zugegeben|bewiesen)", re.IGNORECASE),  # "finally revealed"
+    re.compile(r"\d+\s+(dinge?|gründe?|wege?|fakten?|geheimnisse?).{0,30}(schockier|unglaublich|krass|wild)", re.IGNORECASE),  # listicle
+    re.compile(r"(mainstream.{0,10}medien|lügenpresse).{0,30}(lüg|verschweig|vertusch|versteck)", re.IGNORECASE),  # "lying press"
+    re.compile(r"was (sie|die medien|experten|die regierung) (nicht|ihnen nicht|verschweig)", re.IGNORECASE),  # "what they hide"
+    re.compile(r"(niemand|keiner) (spricht|redet|berichtet) darüber", re.IGNORECASE),   # "nobody talks about this"
+    re.compile(r"das steckt (wirklich )?(dahinter|darunter)", re.IGNORECASE),           # "this is really behind it"
+    re.compile(r"(so|damit) (wollen sie|will er|will sie).{0,30}(täusch|manipulier|ablenk)", re.IGNORECASE),
+    re.compile(r"paukenschlag", re.IGNORECASE),                                         # "thunderclap" = sensational reveal
 )
 
 
