@@ -2,10 +2,12 @@
 
 Pipeline flow (default):
     1. Google News RSS (geo=DE) → trending headlines as topic seeds
-    2. NLP on each headline → generate ordered query variants
-    3. NewsAPI (language=de) → fetch articles per variant until target_count reached
-    4. Persist topics + articles linked via topic_sources
-    5. NLP scoring (run run_nlp.py then compute_scores.py)
+    2. RSS pool: fetch articles from 29 curated German sources (trust 5–91)
+    3. Reddit pool: fetch from German subreddits (optional — skipped if no credentials)
+    4. NLP on each headline → generate ordered NewsAPI query variants
+    5. NewsAPI (language=de) → supplement pool articles until target_count reached
+    6. Persist topics + articles linked via topic_sources
+    7. NLP scoring (run run_nlp.py then compute_scores.py)
 
 Usage:
     python -m src.scrapers.run_all
@@ -25,6 +27,8 @@ from pathlib import Path
 
 from src.scrapers.google_rss_scraper import scrape_google_trends
 from src.scrapers.newsapi_scraper import NewsAPIQuotaError, scrape_newsapi
+from src.scrapers.reddit_scraper import is_reddit_available, scrape_reddit_german
+from src.scrapers.rss_scraper import scrape_rss_sources
 from src.utils.db import init_db, insert_items
 from src.utils.models import RawItem
 
@@ -129,27 +133,83 @@ def _generate_query_variants(title: str) -> list[str]:
     return variants
 
 
+def _pool_matches(article: RawItem, candidates: list[str]) -> bool:
+    """Return True if article title contains at least one candidate keyword."""
+    if not candidates:
+        return False
+    title_lower = (article.get("title") or "").lower()
+    return any(c.lower() in title_lower for c in candidates)
+
+
+def _build_article_pool(
+    rss_days_back: int = 7,
+    rss_max_per_feed: int = 20,
+    reddit_limit_per_sub: int = 25,
+) -> dict[str, RawItem]:
+    """Fetch articles from RSS feeds and (optionally) Reddit.
+
+    Returns a dict keyed by article id for fast dedup lookups.
+    """
+    pool: dict[str, RawItem] = {}
+
+    logger.info("Building article pool: RSS feeds...")
+    rss_items = scrape_rss_sources(max_per_feed=rss_max_per_feed, days_back=rss_days_back)
+    for item in rss_items:
+        pool[item["id"]] = item
+    logger.info("  RSS pool: %d articles from curated sources", len(pool))
+
+    if is_reddit_available():
+        logger.info("Building article pool: Reddit (German subreddits)...")
+        before = len(pool)
+        reddit_items = scrape_reddit_german(limit_per_sub=reddit_limit_per_sub)
+        for item in reddit_items:
+            if item["id"] not in pool:
+                pool[item["id"]] = item
+        logger.info("  Reddit pool: %d new articles added", len(pool) - before)
+    else:
+        logger.info("  Reddit: credentials not configured — skipping.")
+
+    logger.info("Total pool size: %d articles", len(pool))
+    return pool
+
+
 def _fetch_articles_for_topic(
     headline: str,
     language: str,
     target_count: int,
+    pool: dict[str, RawItem] | None = None,
 ) -> list[RawItem]:
     """Fetch up to target_count unique articles for a topic.
 
-    Iterates through query variants generated from the headline, accumulating
-    unique articles (deduped by id) until target_count is reached or all
-    variants are exhausted (up to _MAX_API_CALLS_PER_TOPIC calls).
+    First draws matching articles from the pre-built RSS/Reddit pool, then
+    supplements with NewsAPI calls until target_count is reached.
 
     Args:
         headline: Raw RSS headline used as the topic seed.
         language: NewsAPI language code (e.g. "de").
         target_count: Desired number of articles (e.g. 100).
+        pool: Pre-built article pool from RSS/Reddit (optional).
 
     Returns:
         List of unique RawItem dicts, at most target_count items.
     """
-    variants = _generate_query_variants(headline)
+    _, candidates = _extract_candidates(headline)
     collected: dict[str, RawItem] = {}
+
+    # Phase 1: draw from pool
+    if pool:
+        for item in pool.values():
+            if len(collected) >= target_count:
+                break
+            if _pool_matches(item, candidates):
+                collected[item["id"]] = item
+        logger.info(
+            "    pool match: %d/%d articles (candidates=%s)",
+            len(collected), target_count, candidates[:5],
+        )
+
+    # Phase 2: supplement with NewsAPI
+    variants = _generate_query_variants(headline)
     calls = 0
 
     for query in variants:
@@ -160,7 +220,6 @@ def _fetch_articles_for_topic(
             break
 
         needed = target_count - len(collected)
-        # Fetch slightly more than needed to compensate for dedup losses.
         fetch_size = min(needed + 20, 100)
 
         if calls > 0:
@@ -192,7 +251,6 @@ def _fetch_articles_for_topic(
             query, len(articles), new_count, len(collected), target_count,
         )
 
-        # No point trying more variants if this one returned nothing
         if not articles:
             continue
 
@@ -212,25 +270,27 @@ def run_pipeline(
     target_topics: int = 10,
     articles_per_topic: int = 100,
     db_path: str | Path | None = None,
+    rss_pool_days_back: int = 7,
+    rss_pool_max_per_feed: int = 20,
+    reddit_limit_per_sub: int = 25,
 ) -> dict:
     """Run the full scrape + topic-linking pipeline.
 
-    Fetches rss_candidates headlines from Google RSS, then tries to collect
-    articles_per_topic articles for each. Only topics that reach the full
-    articles_per_topic count are kept; the rest are dropped. Collection stops
-    as soon as target_topics qualifying topics have been found.
+    Fetches rss_candidates headlines from Google RSS, builds an article pool
+    from curated RSS feeds and Reddit, then supplements with NewsAPI calls per
+    topic until articles_per_topic is reached. Only fully-qualifying topics are
+    persisted; collection stops once target_topics are found.
 
     Args:
         geo: Google News country code (default "DE" = Germany).
         language: NewsAPI language code (default "de" = German).
-        rss_candidates: How many RSS headlines to fetch as candidates.
-            Should be well above target_topics to ensure enough qualify.
+        rss_candidates: How many Google RSS headlines to fetch as topic seeds.
         target_topics: Exact number of topics to publish to the dashboard.
-            Topics that cannot reach articles_per_topic are dropped.
-        articles_per_topic: Required article count per topic (default 100).
-            Topics with fewer articles after all query variants are exhausted
-            are discarded so every published topic has a full sample.
+        articles_per_topic: Required article count per topic.
         db_path: SQLite database path. Defaults to data/dashboard.db.
+        rss_pool_days_back: Days back to fetch for the RSS/Reddit pool.
+        rss_pool_max_per_feed: Max articles per RSS feed for the pool.
+        reddit_limit_per_sub: Max posts per subreddit for the pool.
 
     Returns:
         Summary dict with counts.
@@ -248,14 +308,26 @@ def run_pipeline(
         logger.warning("No RSS seeds found — aborting pipeline.")
         return {"rss_seeds": 0, "topics_created": 0, "articles_inserted": 0}
 
-    # ── Steps 2 + 3: collect qualifying topics entirely in memory ─────────────
+    # ── Step 2: Build article pool from RSS + Reddit ───────────────────────────
+    logger.info("=" * 60)
+    logger.info("Step 2 — Building article pool (RSS + Reddit)")
+    logger.info("=" * 60)
+    pool = _build_article_pool(
+        rss_days_back=rss_pool_days_back,
+        rss_max_per_feed=rss_pool_max_per_feed,
+        reddit_limit_per_sub=reddit_limit_per_sub,
+    )
+
+    # ── Steps 3 + 4: collect qualifying topics entirely in memory ─────────────
     # The DB is only updated after all target_topics are collected successfully.
-    # This prevents wiping the current dashboard data when the API quota is
-    # exhausted mid-run or when too few topics qualify.
-    qualified: list[tuple[str, list[RawItem]]] = []  # (headline, articles)
+    qualified: list[tuple[str, list[RawItem]]] = []
     topics_dropped = 0
     total_fetched = 0
     quota_exhausted = False
+
+    logger.info("=" * 60)
+    logger.info("Step 3 — Collecting %d qualifying topics", target_topics)
+    logger.info("=" * 60)
 
     for seed_idx, seed in enumerate(rss_seeds, start=1):
         if len(qualified) >= target_topics:
@@ -280,6 +352,7 @@ def run_pipeline(
                 headline=headline,
                 language=language,
                 target_count=articles_per_topic,
+                pool=pool,
             )
         except NewsAPIQuotaError:
             logger.error(
@@ -367,17 +440,29 @@ def main() -> None:
     parser.add_argument("--language", default="de", help="NewsAPI language (default: de)")
     parser.add_argument(
         "--rss-candidates", type=int, default=25,
-        help="RSS headlines to fetch as candidates (default: 25)",
+        help="Google RSS headlines to fetch as candidates (default: 25)",
     )
     parser.add_argument(
         "--target-topics", type=int, default=10,
-        help="Exact number of topics to publish — topics below article threshold are dropped (default: 10)",
+        help="Exact number of topics to publish (default: 10)",
     )
     parser.add_argument(
         "--articles-per-topic", type=int, default=100,
         help="Required articles per topic — topics that fall short are dropped (default: 100)",
     )
     parser.add_argument("--db-path", default=None, help="SQLite DB path")
+    parser.add_argument(
+        "--rss-pool-days-back", type=int, default=7,
+        help="Days back for RSS/Reddit pool (default: 7)",
+    )
+    parser.add_argument(
+        "--rss-pool-max-per-feed", type=int, default=20,
+        help="Max articles per RSS feed for pool (default: 20)",
+    )
+    parser.add_argument(
+        "--reddit-limit-per-sub", type=int, default=25,
+        help="Max posts per subreddit for pool (default: 25)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -393,6 +478,9 @@ def main() -> None:
         target_topics=args.target_topics,
         articles_per_topic=args.articles_per_topic,
         db_path=args.db_path,
+        rss_pool_days_back=args.rss_pool_days_back,
+        rss_pool_max_per_feed=args.rss_pool_max_per_feed,
+        reddit_limit_per_sub=args.reddit_limit_per_sub,
     )
 
 
