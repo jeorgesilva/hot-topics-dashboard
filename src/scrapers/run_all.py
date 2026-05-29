@@ -235,7 +235,6 @@ def run_pipeline(
     Returns:
         Summary dict with counts.
     """
-    conn = init_db(db_path)
     now = datetime.now(timezone.utc).isoformat()
 
     # ── Step 1: Google RSS → candidate seeds ──────────────────────────────────
@@ -247,23 +246,19 @@ def run_pipeline(
 
     if not rss_seeds:
         logger.warning("No RSS seeds found — aborting pipeline.")
-        conn.close()
         return {"rss_seeds": 0, "topics_created": 0, "articles_inserted": 0}
 
-    # Clear old topics so rankings are always fresh (child tables first)
-    conn.execute("DELETE FROM topic_sources")
-    conn.execute("DELETE FROM topic_scores")
-    conn.execute("DELETE FROM topics")
-    conn.commit()
-
-    topics_created = 0
+    # ── Steps 2 + 3: collect qualifying topics entirely in memory ─────────────
+    # The DB is only updated after all target_topics are collected successfully.
+    # This prevents wiping the current dashboard data when the API quota is
+    # exhausted mid-run or when too few topics qualify.
+    qualified: list[tuple[str, list[RawItem]]] = []  # (headline, articles)
     topics_dropped = 0
-    articles_inserted = 0
     total_fetched = 0
+    quota_exhausted = False
 
-    # ── Steps 2 + 3: per-topic query variants + NewsAPI fetch ─────────────────
     for seed_idx, seed in enumerate(rss_seeds, start=1):
-        if topics_created >= target_topics:
+        if len(qualified) >= target_topics:
             logger.info("  Target of %d topics reached — stopping early.", target_topics)
             break
 
@@ -277,7 +272,7 @@ def run_pipeline(
         )
         logger.info(
             "           %d query variants | need %d more topics",
-            len(variants), target_topics - topics_created,
+            len(variants), target_topics - len(qualified),
         )
 
         try:
@@ -288,10 +283,11 @@ def run_pipeline(
             )
         except NewsAPIQuotaError:
             logger.error(
-                "  NewsAPI quota exhausted after %d topics. "
-                "Quota resets at midnight UTC.",
-                topics_created,
+                "  NewsAPI quota exhausted after %d qualifying topics. "
+                "Quota resets at midnight UTC. Dashboard data unchanged.",
+                len(qualified),
             )
+            quota_exhausted = True
             break
 
         total_fetched += len(articles)
@@ -304,34 +300,52 @@ def run_pipeline(
             )
             continue
 
-        # Persist qualifying topic (sequential id among accepted topics)
-        topic_id = topics_created + 1
+        qualified.append((headline, articles))
+        logger.info(
+            "    ✓ qualified  articles=%d  (%d/%d done)",
+            len(articles), len(qualified), target_topics,
+        )
+
+    # ── Step 4: persist only when we have the full target set ─────────────────
+    if quota_exhausted and not qualified:
+        logger.warning("No topics collected — keeping existing dashboard data.")
+        return {
+            "rss_seeds": len(rss_seeds),
+            "topics_created": 0,
+            "topics_dropped": topics_dropped,
+            "articles_fetched": total_fetched,
+            "articles_inserted": 0,
+            "quota_exhausted": True,
+        }
+
+    conn = init_db(db_path)
+
+    conn.execute("DELETE FROM topic_sources")
+    conn.execute("DELETE FROM topic_scores")
+    conn.execute("DELETE FROM topics")
+    conn.commit()
+
+    articles_inserted = 0
+    for topic_id, (headline, articles) in enumerate(qualified, start=1):
         conn.execute(
             "INSERT OR REPLACE INTO topics (id, label, created_at, item_count) VALUES (?, ?, ?, ?)",
             (topic_id, headline[:255], now, len(articles)),
         )
-
         inserted = insert_items(conn, articles)
         articles_inserted += inserted
-
         conn.executemany(
             "INSERT OR IGNORE INTO topic_sources (topic_id, item_id) VALUES (?, ?)",
             [(topic_id, a["id"]) for a in articles],
         )
         conn.commit()
-
-        topics_created += 1
-        logger.info(
-            "    ✓ topic_id=%d  articles=%d  new=%d  (%d/%d done)",
-            topic_id, len(articles), inserted, topics_created, target_topics,
-        )
+        logger.info("    persisted topic_id=%d  articles=%d  new=%d", topic_id, len(articles), inserted)
 
     conn.close()
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("PIPELINE COMPLETE")
-    logger.info("  Topics published: %d / %d target", topics_created, target_topics)
+    logger.info("  Topics published: %d / %d target", len(qualified), target_topics)
     logger.info("  Topics dropped  : %d (insufficient articles)", topics_dropped)
     logger.info("  Articles fetched: %d", total_fetched)
     logger.info("  Articles new    : %d", articles_inserted)
@@ -339,10 +353,11 @@ def run_pipeline(
 
     return {
         "rss_seeds": len(rss_seeds),
-        "topics_created": topics_created,
+        "topics_created": len(qualified),
         "topics_dropped": topics_dropped,
         "articles_fetched": total_fetched,
         "articles_inserted": articles_inserted,
+        "quota_exhausted": quota_exhausted,
     }
 
 
