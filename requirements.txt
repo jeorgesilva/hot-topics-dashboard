@@ -10,6 +10,7 @@ trafilatura>=1.12.0
 
 # NLP
 spacy>=3.7.0
+https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.7.0/de_core_news_sm-3.7.0-py3-none-any.whl
 transformers>=4.36.0
 torch>=2.1.0
 sentence-transformers>=2.2.0
