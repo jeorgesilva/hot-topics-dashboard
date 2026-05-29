@@ -37,6 +37,11 @@ if not NEWSAPI_KEY:
 
 logger = logging.getLogger(__name__)
 
+
+class NewsAPIQuotaError(Exception):
+    """Raised when the NewsAPI daily request quota (HTTP 429) is exceeded."""
+
+
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 DEFAULT_QUERY = "Deutschland"
 DEFAULT_LANGUAGE = "de"
@@ -95,8 +100,15 @@ def scrape_newsapi(
 
     try:
         response = requests.get(NEWSAPI_URL, params=params, timeout=REQUEST_TIMEOUT)
+        if response.status_code == 429:
+            raise NewsAPIQuotaError(
+                "NewsAPI daily request quota exceeded (HTTP 429). "
+                "Quota resets at midnight UTC."
+            )
         response.raise_for_status()
         data = response.json()
+    except NewsAPIQuotaError:
+        raise
     except requests.RequestException:
         logger.exception("Failed to fetch NewsAPI articles (q='%s')", query)
         return []

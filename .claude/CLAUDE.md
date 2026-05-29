@@ -12,8 +12,16 @@ Real-time misinformation detection dashboard. Scrapes trending topics from Reddi
 
 - `streamlit run src/dashboard/app.py` — run dashboard locally
 - `python -m pytest tests/ -v` — run all tests
-- `python src/scrapers/run_all.py` — run scraper pipeline
-- `python src/scoring/compute_scores.py` — recompute risk scores
+
+Full pipeline (run in order):
+1. `python -m src.scrapers.run_all` — Google RSS → NewsAPI (10 topics × 100 articles, German)
+2. `python -m src.scoring.run_nlp` — sentiment, framing, attribution NLP scoring per topic
+3. `python -m src.scoring.compute_scores` — composite risk score per topic
+
+First-time setup (after `pip install -r requirements.txt`):
+- `python -m spacy download de_core_news_sm` — German NLP model (required)
+- Copy `config/.env.template` to `.env` and fill in `NEWSAPI_KEY`
+  (free tier: https://newsapi.org/register — 100 requests/day)
 
 ## Architecture
 
