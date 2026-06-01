@@ -650,11 +650,20 @@ def _render_social_track(row: pd.Series) -> None:
             ),
         )
 
-    social_avg_trust = float(row.get("social_avg_trust") or 50)
-    social_sentiment = float(row.get("social_avg_sentiment_extremity") or 0)
-    social_coverage = float(row.get("social_coverage_ratio") or 0)
-    social_framing = float(row.get("social_framing_inconsistency") or 0)
-    social_sensationalism = float(row.get("social_sensationalism_avg") or 0)
+    social_avg_trust_raw = row.get("social_avg_trust")
+    social_avg_trust = 50.0 if social_avg_trust_raw is None or pd.isna(social_avg_trust_raw) else float(social_avg_trust_raw)
+
+    social_sentiment_raw = row.get("social_avg_sentiment_extremity")
+    social_sentiment = 0.0 if social_sentiment_raw is None or pd.isna(social_sentiment_raw) else float(social_sentiment_raw)
+
+    social_coverage_raw = row.get("social_coverage_ratio")
+    social_coverage = 0.0 if social_coverage_raw is None or pd.isna(social_coverage_raw) else float(social_coverage_raw)
+
+    social_framing_raw = row.get("social_framing_inconsistency")
+    social_framing = 0.0 if social_framing_raw is None or pd.isna(social_framing_raw) else float(social_framing_raw)
+
+    social_sensationalism_raw = row.get("social_sensationalism_avg")
+    social_sensationalism = 0.0 if social_sensationalism_raw is None or pd.isna(social_sensationalism_raw) else float(social_sensationalism_raw)
 
     signals = [
         ("🏛️ Source Distrust",     _WEIGHTS["avg_trust"] * (1.0 - social_avg_trust / 100.0),     f"avg trust {social_avg_trust:.1f}", _SIGNAL_TOOLTIPS["Source Distrust"]),
