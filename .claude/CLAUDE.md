@@ -19,7 +19,7 @@ Full pipeline (run in order):
 3. `python -m src.scoring.compute_scores` — composite risk score per topic
 
 First-time setup (after `pip install -r requirements.txt`):
-- `python -m spacy download de_core_news_sm` — German NLP model (required)
+- `python -m spacy download de_core_news_lg` — German NLP model (required)
 - Copy `config/.env.template` to `.env` and fill in `NEWSAPI_KEY`
   (free tier: https://newsapi.org/register — 100 requests/day)
 

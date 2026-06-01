@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 
+from src.scrapers.article_fetcher import enrich_articles_with_body
 from src.scrapers.google_rss_scraper import scrape_google_trends
 from src.scrapers.newsapi_scraper import NewsAPIQuotaError, scrape_newsapi
 from src.scrapers.reddit_scraper import (
@@ -471,6 +472,9 @@ def run_pipeline(
                     "    Reddit: only %d/%d posts after supplement",
                     len(reddit_articles), reddit_per_topic,
                 )
+
+        # Fetch full article body for all verified articles
+        enrich_articles_with_body(verified_articles, max_per_batch=len(verified_articles))
 
         # Enrich link posts that have no body text with their top comments
         enrich_with_comments(reddit_articles)

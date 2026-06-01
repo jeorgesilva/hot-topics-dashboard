@@ -59,6 +59,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             id              TEXT PRIMARY KEY,
             title           TEXT NOT NULL,
             description     TEXT,
+            body_text       TEXT,
             source          TEXT NOT NULL,
             url             TEXT NOT NULL,
             platform        TEXT NOT NULL,
@@ -124,7 +125,24 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             narrative_divergence           REAL
         )
     """)
+    # Dynamic trust resolver cache — keyed by domain, populated on first lookup.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS domain_trust_cache (
+            domain      TEXT PRIMARY KEY,
+            trust_score REAL NOT NULL,
+            method      TEXT NOT NULL,
+            cached_at   TEXT NOT NULL
+        )
+    """)
+
     # Idempotent migration: add columns introduced after initial schema deploy.
+    raw_existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(raw_items)").fetchall()
+    }
+    if "body_text" not in raw_existing:
+        conn.execute("ALTER TABLE raw_items ADD COLUMN body_text TEXT")
+
     existing = {
         row[1]
         for row in conn.execute("PRAGMA table_info(topic_scores)").fetchall()
@@ -168,15 +186,16 @@ def insert_items(
     conn.executemany(
         """
         INSERT OR IGNORE INTO raw_items
-            (id, title, description, source, url, platform, timestamp, engagement_json)
+            (id, title, description, body_text, source, url, platform, timestamp, engagement_json)
         VALUES
-            (:id, :title, :description, :source, :url, :platform, :timestamp, :engagement_json)
+            (:id, :title, :description, :body_text, :source, :url, :platform, :timestamp, :engagement_json)
         """,
         [
             {
                 "id": item["id"],
                 "title": item["title"],
                 "description": item.get("description"),
+                "body_text": item.get("body_text"),  # type: ignore[typeddict-item]
                 "source": item["source"],
                 "url": item["url"],
                 "platform": item["platform"],

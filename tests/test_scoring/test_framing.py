@@ -79,6 +79,22 @@ def identical_model(monkeypatch, empty_ner):
 
 
 @pytest.fixture
+def single_tier_identical_model(monkeypatch, empty_ner):
+    """Single-tier fallback: identical embeddings → intra-cluster variance ≈ 0."""
+    vec = [1.0, 0.0, 0.0]
+    encoder = _MockEncoder(*([vec] * 20))
+    monkeypatch.setattr("src.scoring.framing._get_model", lambda: encoder)
+
+
+@pytest.fixture
+def single_tier_diverse_model(monkeypatch, empty_ner):
+    """Single-tier fallback: orthogonal embeddings → intra-cluster variance > 0."""
+    vecs = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    encoder = _MockEncoder(*(vecs * 10))
+    monkeypatch.setattr("src.scoring.framing._get_model", lambda: encoder)
+
+
+@pytest.fixture
 def orthogonal_model(monkeypatch, empty_ner):
     """High-trust gets [1,0,0], low-trust gets [0,1,0] → cosine distance = 1."""
     high_vecs = [[1.0, 0.0, 0.0]] * 3
@@ -152,19 +168,24 @@ class TestComputeFraming:
         assert result["high_trust_articles"] == []
         assert result["low_trust_articles"] == []
 
-    def test_all_high_trust_returns_fallback(self):
+    def test_all_high_trust_identical_variance_near_zero(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
         result = compute_framing(articles, {"bbc.com": 90.0})
-        assert result["framing_inconsistency"] == 0.0
+        assert result["framing_inconsistency"] < 0.05
         assert len(result["high_trust_articles"]) == 3
         assert result["low_trust_articles"] == []
 
-    def test_all_low_trust_returns_fallback(self):
+    def test_all_low_trust_identical_variance_near_zero(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "tabloid.net") for i in range(3)]
         result = compute_framing(articles, {"tabloid.net": 20.0})
-        assert result["framing_inconsistency"] == 0.0
+        assert result["framing_inconsistency"] < 0.05
         assert result["high_trust_articles"] == []
         assert len(result["low_trust_articles"]) == 3
+
+    def test_single_tier_diverse_variance_nonzero(self, single_tier_diverse_model):
+        articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
+        result = compute_framing(articles, {"bbc.com": 90.0})
+        assert result["framing_inconsistency"] > 0.0
 
     def test_identical_framing_near_zero(self, identical_model):
         articles = (
@@ -237,7 +258,7 @@ class TestComputeFraming:
         result = compute_framing([], {})
         assert result["fact_inconsistency"] == 0.0
 
-    def test_fact_inconsistency_zero_fallback_one_tier(self):
+    def test_fact_inconsistency_zero_fallback_one_tier(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
         result = compute_framing(articles, {"bbc.com": 90.0})
         assert result["fact_inconsistency"] == 0.0
