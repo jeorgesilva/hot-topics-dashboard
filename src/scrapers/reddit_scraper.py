@@ -129,12 +129,11 @@ def _parse_reddit_atom(xml_text: str, source: str) -> list[RawItem]:
         if not title:
             continue
 
-        # Use per-entry subreddit label when available (global search results
-        # each belong to a different community)
         category_elem = entry.find(f"{_ATOM_NS}category")
         entry_source = (
-            category_elem.get("label") or source
-            if category_elem is not None else source
+            (category_elem.get("label") or source)
+            if category_elem is not None
+            else source
         )
 
         updated_elem = entry.find(f"{_ATOM_NS}updated")
