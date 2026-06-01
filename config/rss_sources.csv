@@ -10,7 +10,7 @@ Welt,https://www.welt.de/feeds/topnews.rss,65,RIGHT-CENTER,de
 Stern,https://www.stern.de/feed/,68,LEFT-CENTER,de
 Focus Online,https://rss.focus.de/fol/special/rss.html,55,RIGHT-CENTER,de
 n-tv,https://www.n-tv.de/rss,62,CENTER,de
-BILD,https://www.bild.de/rssfeeds/rss3-20745882,feed=alles.bild.html,32,RIGHT,de
+BILD,"https://www.bild.de/rssfeeds/rss3-20745882,feed=alles.bild.html",32,RIGHT,de
 MDR,https://www.mdr.de/nachrichten/index-rss.xml,88,CENTER,de
 BR24,https://www.br.de/nachrichten/rss/nachrichten100.rss,87,CENTER,de
 ZDF Heute,https://www.zdf.de/rss/zdf/nachrichten,90,CENTER,de
