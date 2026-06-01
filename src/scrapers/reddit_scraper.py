@@ -436,7 +436,7 @@ if __name__ == "__main__":
     print(f"Total: {len(results)} posts\n")
 
     print("=== Keyword search ===")
-    kw_results = scrape_reddit_by_keywords(["Bundesrat", "Migration"], limit_per_query=3)
+    kw_results = scrape_reddit_by_keywords(["Bundesrat", "Migration"], limit_per_keyword=3)
     for r in kw_results[:3]:
         print(f"[{r['source']}] {r['title'][:80]}")
     print(f"Total: {len(kw_results)} posts")
