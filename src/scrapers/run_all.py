@@ -318,7 +318,7 @@ def _fetch_articles_for_topic(
 def run_pipeline(
     geo: str = "DE",
     language: str = "de",
-    rss_candidates: int = 25,
+    rss_candidates: int = 50,
     target_topics: int = 10,
     articles_per_topic: int = 20,
     reddit_per_topic: int = 20,
@@ -327,6 +327,7 @@ def run_pipeline(
     rss_pool_max_per_feed: int = 20,
     reddit_limit_per_sub: int = 25,
     skip_newsapi: bool = False,
+    min_articles_no_newsapi: int = 10,
 ) -> dict:
     """Run the full scrape + topic-linking pipeline (two-track).
 
@@ -334,21 +335,26 @@ def run_pipeline(
     - Verified track: articles_per_topic items from curated RSS + NewsAPI.
     - Social track:   reddit_per_topic posts from Reddit (soft limit).
 
-    A topic qualifies when it reaches articles_per_topic verified articles.
-    Reddit posts are linked as supplementary items for the social risk score.
+    A topic qualifies when it reaches the minimum verified article count.
+    With NewsAPI enabled that minimum is articles_per_topic (default 20).
+    With --no-newsapi the minimum falls back to min_articles_no_newsapi
+    (default 15) because the RSS pool alone rarely covers niche stories.
 
     Args:
         geo: Google News country code (default "DE" = Germany).
         language: NewsAPI language code (default "de" = German).
         rss_candidates: How many Google RSS headlines to fetch as topic seeds.
         target_topics: Exact number of topics to publish to the dashboard.
-        articles_per_topic: Required verified articles per topic (default 20).
+        articles_per_topic: Target verified articles per topic (default 20).
         reddit_per_topic: Max Reddit posts to link per topic (default 20).
         db_path: SQLite database path. Defaults to data/dashboard.db.
         rss_pool_days_back: Days back to fetch for the RSS/Reddit pool.
         rss_pool_max_per_feed: Max articles per RSS feed for the pool.
         reddit_limit_per_sub: Max posts per subreddit for the pool.
         skip_newsapi: If True, skip all NewsAPI calls (pool-only mode).
+        min_articles_no_newsapi: Minimum verified articles to qualify a topic
+            when skip_newsapi=True (default 15, lower than articles_per_topic
+            because the RSS pool alone cannot supply 20 for niche stories).
 
     Returns:
         Summary dict with counts.
@@ -394,8 +400,15 @@ def run_pipeline(
     total_fetched = 0
     quota_exhausted = False
 
+    # In pool-only mode the RSS alone rarely supplies 20 articles for niche
+    # topics, so we accept a lower count rather than drop most candidates.
+    min_qualify = min_articles_no_newsapi if skip_newsapi else articles_per_topic
+
     logger.info("=" * 60)
-    logger.info("Step 3 — Collecting %d qualifying topics", target_topics)
+    logger.info(
+        "Step 3 — Collecting %d qualifying topics (min verified: %d)",
+        target_topics, min_qualify,
+    )
     logger.info("=" * 60)
 
     for seed_idx, seed in enumerate(rss_seeds, start=1):
@@ -435,11 +448,11 @@ def run_pipeline(
 
         total_fetched += len(verified_articles)
 
-        if len(verified_articles) < articles_per_topic:
+        if len(verified_articles) < min_qualify:
             topics_dropped += 1
             logger.info(
                 "    ✗ dropped — only %d/%d verified articles",
-                len(verified_articles), articles_per_topic,
+                len(verified_articles), min_qualify,
             )
             continue
 
@@ -552,8 +565,8 @@ def main() -> None:
     parser.add_argument("--geo", default="DE", help="Google News country code (default: DE)")
     parser.add_argument("--language", default="de", help="NewsAPI language (default: de)")
     parser.add_argument(
-        "--rss-candidates", type=int, default=25,
-        help="Google RSS headlines to fetch as candidates (default: 25)",
+        "--rss-candidates", type=int, default=50,
+        help="Google RSS headlines to fetch as candidates (default: 50)",
     )
     parser.add_argument(
         "--target-topics", type=int, default=10,
@@ -584,6 +597,14 @@ def main() -> None:
         "--no-newsapi", action="store_true",
         help="Skip all NewsAPI calls — use only RSS/Reddit pool (useful when quota is exhausted)",
     )
+    parser.add_argument(
+        "--min-articles-no-newsapi", type=int, default=10,
+        help=(
+            "Minimum verified articles to qualify a topic when --no-newsapi is set "
+            "(default: 15; lower than --articles-per-topic because the RSS pool alone "
+            "cannot supply 20 articles for niche stories)"
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -604,6 +625,7 @@ def main() -> None:
         rss_pool_max_per_feed=args.rss_pool_max_per_feed,
         reddit_limit_per_sub=args.reddit_limit_per_sub,
         skip_newsapi=args.no_newsapi,
+        min_articles_no_newsapi=args.min_articles_no_newsapi,
     )
 
 
