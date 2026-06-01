@@ -84,6 +84,15 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 ts.fact_inconsistency,
                 ts.composite_risk,
                 ts.computed_at,
+                ts.social_avg_trust,
+                ts.social_coverage_ratio,
+                ts.social_avg_sentiment_extremity,
+                ts.social_sensationalism_avg,
+                ts.social_framing_inconsistency,
+                ts.social_attribution_vagueness,
+                ts.social_fact_inconsistency,
+                ts.social_risk,
+                ts.narrative_divergence,
                 (SELECT GROUP_CONCAT(DISTINCT ri.platform)
                  FROM topic_sources ts2
                  JOIN raw_items ri ON ri.id = ts2.item_id
@@ -323,6 +332,19 @@ def _render_topic_card(row: pd.Series) -> None:
     grade_colour = _GRADE_COLOUR.get(grade, "#999")
     icons = _platform_icons(platforms_str)
     risk_str = _risk_badge_html(risk) if risk is not None else "<em style='color:#aaa'>unscored</em>"
+
+    div_raw = row.get("narrative_divergence")
+    div_val = None if pd.isna(div_raw) else float(div_raw)
+    div_badge = ""
+    if div_val is not None:
+        div_colour = "#e74c3c" if div_val >= 0.3 else "#e67e22" if div_val >= 0.15 else "#2ecc71"
+        div_badge = (
+            f"<span title='Narrative divergence: how much Reddit framing differs from verified sources' "
+            f"style='background:{div_colour};color:#fff;padding:2px 7px;"
+            f"border-radius:4px;font-size:0.78em;margin-left:6px;cursor:help'>"
+            f"Δ {div_val:.2f}</span>"
+        )
+
     keywords = _parse_keywords(row.get("keywords_raw"))
     kw_section = "".join(
         f"<span style='background:#1a1a1a;color:#ccc;border:1px solid #444;"
@@ -336,6 +358,7 @@ def _render_topic_card(row: pd.Series) -> None:
     title_row = (
         f"{_grade_badge_html(grade)}"
         f"<strong style='font-size:1.0em;color:#fff;margin-left:8px'>{_truncate(topic, 70)}</strong>"
+        f"{div_badge}"
         f"<span style='color:#aaa;font-size:0.85em;margin-left:8px'>{articles} articles &nbsp;{icons}</span>"
         f"<span style='margin-left:auto'>Risk: {risk_str}</span>"
     )
@@ -463,6 +486,9 @@ def render_topic(topic_id: int, db_path: str) -> None:
     _render_score_breakdown(row)
     st.markdown("---")
 
+    _render_social_track(row)
+    st.markdown("---")
+
     col_radar, col_domain = st.columns(2)
     with col_radar:
         _render_radar(row)
@@ -574,6 +600,110 @@ def _render_score_breakdown(row: pd.Series) -> None:
                 weight {weight * 100:.0f}% · {share_pct:.0f}% of total risk
               </div>
             </div>""",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_social_track(row: pd.Series) -> None:
+    """Render the social (Reddit) risk track and narrative divergence panel."""
+    social_risk_raw = row.get("social_risk")
+    social_risk = None if pd.isna(social_risk_raw) else float(social_risk_raw)
+    div_raw = row.get("narrative_divergence")
+    div_val = None if pd.isna(div_raw) else float(div_raw)
+
+    verified_risk_raw = row.get("composite_risk")
+    verified_risk = 0.0 if verified_risk_raw is None or pd.isna(verified_risk_raw) else float(verified_risk_raw)
+    st.subheader("Social Media Track (Reddit)")
+
+    if social_risk is None:
+        st.info(
+            "No Reddit articles were linked to this topic — social risk track unavailable. "
+            "Re-run the pipeline with Reddit enabled to populate this section."
+        )
+        return
+
+    social_grade = grade_topic(social_risk)
+    div_colour = "#e74c3c" if (div_val or 0) >= 0.3 else "#e67e22" if (div_val or 0) >= 0.15 else "#2ecc71"
+
+    col_v, col_s, col_d = st.columns(3)
+    col_v.metric(
+        "Verified Risk",
+        f"{verified_risk * 100:.1f}%",
+        help="Composite risk computed from NewsAPI/RSS articles (journalistic sources).",
+    )
+    col_s.metric(
+        "Social Risk",
+        f"{social_risk * 100:.1f}%",
+        delta=f"{(social_risk - verified_risk) * 100:+.1f}% vs verified",
+        delta_color="inverse",
+        help="Composite risk computed from Reddit posts for this topic.",
+    )
+    if div_val is not None:
+        col_d.metric(
+            "Narrative Divergence",
+            f"{div_val * 100:.1f}%",
+            help=(
+                "Absolute gap between verified and social risk scores. "
+                "High divergence means Reddit discussions frame this topic very "
+                "differently from journalistic sources — a potential misinformation signal."
+            ),
+        )
+
+    social_avg_trust_raw = row.get("social_avg_trust")
+    social_avg_trust = 50.0 if social_avg_trust_raw is None or pd.isna(social_avg_trust_raw) else float(social_avg_trust_raw)
+
+    social_sentiment_raw = row.get("social_avg_sentiment_extremity")
+    social_sentiment = 0.0 if social_sentiment_raw is None or pd.isna(social_sentiment_raw) else float(social_sentiment_raw)
+
+    social_coverage_raw = row.get("social_coverage_ratio")
+    social_coverage = 0.0 if social_coverage_raw is None or pd.isna(social_coverage_raw) else float(social_coverage_raw)
+
+    social_framing_raw = row.get("social_framing_inconsistency")
+    social_framing = 0.0 if social_framing_raw is None or pd.isna(social_framing_raw) else float(social_framing_raw)
+
+    social_sensationalism_raw = row.get("social_sensationalism_avg")
+    social_sensationalism = 0.0 if social_sensationalism_raw is None or pd.isna(social_sensationalism_raw) else float(social_sensationalism_raw)
+
+    signals = [
+        ("🏛️ Source Distrust",     _WEIGHTS["avg_trust"] * (1.0 - social_avg_trust / 100.0),     f"avg trust {social_avg_trust:.1f}", _SIGNAL_TOOLTIPS["Source Distrust"]),
+        ("😤 Sentiment Extremity", _WEIGHTS["avg_sentiment_extremity"] * social_sentiment,         f"signal {social_sentiment * 100:.1f}%", _SIGNAL_TOOLTIPS["Sentiment Extremity"]),
+        ("📡 Low Coverage",        _WEIGHTS["coverage_ratio"] * (1.0 - social_coverage),           f"{social_coverage * 100:.1f}% credible", _SIGNAL_TOOLTIPS["Low Coverage"]),
+        ("🔀 Framing Divergence",  _WEIGHTS["framing_inconsistency"] * social_framing,             f"signal {social_framing * 100:.1f}%", _SIGNAL_TOOLTIPS["Framing Divergence"]),
+        ("📢 Sensationalism",      _WEIGHTS["sensationalism_avg"] * social_sensationalism,         f"signal {social_sensationalism * 100:.1f}%", _SIGNAL_TOOLTIPS["Sensationalism"]),
+    ]
+
+    cols = st.columns(5)
+    for col, (label, contribution, detail, tooltip) in zip(cols, signals):
+        share_pct = (contribution / social_risk * 100) if social_risk > 0 else 0.0
+        c = "#e74c3c" if contribution > 0.10 else "#e67e22" if contribution > 0.05 else "#2ecc71"
+        col.markdown(
+            f"""<div title="{tooltip}" style='border:1px solid #dee2e6;border-radius:8px;
+            padding:12px;text-align:center;min-height:110px;cursor:help'>
+              <div style='font-size:0.78em;color:#555;margin-bottom:4px'>{label}</div>
+              <div style='font-size:1.6em;font-weight:bold;color:{c}'>{contribution * 100:.1f}%</div>
+              <div style='font-size:0.75em;color:#888'>{detail}</div>
+              <div style='font-size:0.68em;color:#aaa;margin-top:4px'>{share_pct:.0f}% of social risk</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+    st.caption(
+        f"Social grade: {_grade_badge_html(social_grade)} &nbsp; "
+        f"Based on Reddit posts for this topic.",
+        unsafe_allow_html=True,
+    )
+
+    if div_val is not None:
+        st.markdown(
+            f"<div style='margin-top:12px;padding:10px 14px;border-left:4px solid {div_colour};"
+            f"background:#0a0a0a;border-radius:0 6px 6px 0'>"
+            f"<strong style='color:{div_colour}'>Narrative Divergence: {div_val * 100:.1f}%</strong>"
+            f"<span style='color:#aaa;font-size:0.85em;margin-left:10px'>"
+            f"Verified risk {verified_risk * 100:.1f}% vs Social risk {social_risk * 100:.1f}%"
+            + (" — high divergence suggests coordinated social amplification." if div_val >= 0.3
+               else " — moderate divergence, social framing differs from press coverage." if div_val >= 0.15
+               else " — low divergence, social and press coverage broadly aligned.")
+            + "</span></div>",
             unsafe_allow_html=True,
         )
 

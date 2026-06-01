@@ -112,7 +112,16 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             attribution_vagueness   REAL,
             fact_inconsistency      REAL,
             composite_risk          REAL,
-            computed_at             TEXT
+            computed_at             TEXT,
+            social_avg_trust               REAL,
+            social_coverage_ratio          REAL,
+            social_avg_sentiment_extremity REAL,
+            social_sensationalism_avg      REAL,
+            social_framing_inconsistency   REAL,
+            social_attribution_vagueness   REAL,
+            social_fact_inconsistency      REAL,
+            social_risk                    REAL,
+            narrative_divergence           REAL
         )
     """)
     # Idempotent migration: add columns introduced after initial schema deploy.
@@ -120,9 +129,21 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         row[1]
         for row in conn.execute("PRAGMA table_info(topic_scores)").fetchall()
     }
-    for col in ("attribution_vagueness", "fact_inconsistency"):
+    for col, type_ in [
+        ("attribution_vagueness",          "REAL"),
+        ("fact_inconsistency",             "REAL"),
+        ("social_avg_trust",               "REAL"),
+        ("social_coverage_ratio",          "REAL"),
+        ("social_avg_sentiment_extremity", "REAL"),
+        ("social_sensationalism_avg",      "REAL"),
+        ("social_framing_inconsistency",   "REAL"),
+        ("social_attribution_vagueness",   "REAL"),
+        ("social_fact_inconsistency",      "REAL"),
+        ("social_risk",                    "REAL"),
+        ("narrative_divergence",           "REAL"),
+    ]:
         if col not in existing:
-            conn.execute(f"ALTER TABLE topic_scores ADD COLUMN {col} REAL")
+            conn.execute(f"ALTER TABLE topic_scores ADD COLUMN {col} {type_}")
     conn.commit()
     logger.info("Database initialized at %s", db_path or DEFAULT_DB_PATH)
     return conn

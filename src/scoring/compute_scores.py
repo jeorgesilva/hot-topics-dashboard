@@ -146,12 +146,12 @@ def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
 
 
 def compute_composite(conn: sqlite3.Connection) -> int:
-    """Fill composite_risk and computed_at for topics with all signals present.
+    """Fill composite_risk, social_risk, narrative_divergence, and computed_at.
 
-    A topic is skipped if any of the three Person-A columns
+    A topic is skipped if any verified-track Person-A column
     (avg_sentiment_extremity, sensationalism_avg, framing_inconsistency)
-    are NULL — those are filled by Person A's pipeline and may not yet
-    be available.
+    is NULL. social_risk is computed only when all social-track NLP signals
+    are present; narrative_divergence requires both tracks to be scored.
 
     Args:
         conn: Active database connection.
@@ -161,9 +161,14 @@ def compute_composite(conn: sqlite3.Connection) -> int:
     """
     rows = conn.execute(
         """
-        SELECT topic_id, avg_trust, avg_sentiment_extremity,
-               coverage_ratio, framing_inconsistency, sensationalism_avg,
-               attribution_vagueness, fact_inconsistency
+        SELECT topic_id,
+               avg_trust, avg_sentiment_extremity, coverage_ratio,
+               framing_inconsistency, sensationalism_avg,
+               attribution_vagueness, fact_inconsistency,
+               social_avg_trust, social_avg_sentiment_extremity,
+               social_coverage_ratio, social_framing_inconsistency,
+               social_sensationalism_avg, social_attribution_vagueness,
+               social_fact_inconsistency
         FROM topic_scores
         WHERE avg_trust IS NOT NULL
           AND avg_sentiment_extremity IS NOT NULL
@@ -185,13 +190,43 @@ def compute_composite(conn: sqlite3.Connection) -> int:
             attribution_vagueness=row["attribution_vagueness"] or 0.0,
             fact_inconsistency=row["fact_inconsistency"] or 0.0,
         )
+
+        social_risk: float | None = None
+        if (
+            row["social_avg_sentiment_extremity"] is not None
+            and row["social_sensationalism_avg"] is not None
+            and row["social_framing_inconsistency"] is not None
+        ):
+            social_risk = compute_risk(
+                avg_trust=row["social_avg_trust"] or 50.0,
+                avg_sentiment_extremity=row["social_avg_sentiment_extremity"],
+                coverage_ratio=row["social_coverage_ratio"] or 0.0,
+                framing_inconsistency=row["social_framing_inconsistency"],
+                sensationalism_avg=row["social_sensationalism_avg"],
+                attribution_vagueness=row["social_attribution_vagueness"] or 0.0,
+                fact_inconsistency=row["social_fact_inconsistency"] or 0.0,
+            )
+
+        divergence = (
+            round(abs(risk - social_risk), 6) if social_risk is not None else None
+        )
+
         conn.execute(
             """
             UPDATE topic_scores
-            SET composite_risk = ?, computed_at = ?
+            SET composite_risk       = ?,
+                social_risk          = ?,
+                narrative_divergence = ?,
+                computed_at          = ?
             WHERE topic_id = ?
             """,
-            (round(risk, 6), now, row["topic_id"]),
+            (
+                round(risk, 6),
+                round(social_risk, 6) if social_risk is not None else None,
+                divergence,
+                now,
+                row["topic_id"],
+            ),
         )
         scored += 1
 
