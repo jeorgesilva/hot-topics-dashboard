@@ -610,8 +610,9 @@ def _render_social_track(row: pd.Series) -> None:
     social_risk = None if pd.isna(social_risk_raw) else float(social_risk_raw)
     div_raw = row.get("narrative_divergence")
     div_val = None if pd.isna(div_raw) else float(div_raw)
-    verified_risk = float(row.get("composite_risk") or 0)
 
+    verified_risk_raw = row.get("composite_risk")
+    verified_risk = 0.0 if verified_risk_raw is None or pd.isna(verified_risk_raw) else float(verified_risk_raw)
     st.subheader("Social Media Track (Reddit)")
 
     if social_risk is None:
