@@ -32,7 +32,7 @@ def _get_nlp() -> spacy.language.Language:
     """Load and cache the spaCy model."""
     global _nlp
     if _nlp is None:
-        _nlp = spacy.load("en_core_web_md", disable=["parser", "ner"])
+        _nlp = spacy.load("de_core_news_lg", disable=["parser", "ner"])
     return _nlp
 
 
@@ -68,12 +68,17 @@ def tokenize_and_lemmatize(text: str) -> tuple[list[str], list[str]]:
 def preprocess(item: RawItem) -> CleanedItem:
     """Clean and tokenize a single raw item.
 
-    Combines title and description into a single cleaned_text field,
-    then runs tokenization and lemmatization via spaCy.
+    Combines title, description, and body_text (when available) into a single
+    cleaned_text field, then runs tokenization and lemmatization via spaCy.
+    Body text is the full scraped article body from article_fetcher; it provides
+    substantially more signal for NLP scoring than title+description alone.
     """
     raw_text = item["title"]
     if item.get("description"):
         raw_text = f"{raw_text} {item['description']}"
+    body = item.get("body_text")  # type: ignore[typeddict-item]
+    if body:
+        raw_text = f"{raw_text} {body}"
 
     cleaned = clean_text(raw_text)
     tokens, lemmas = tokenize_and_lemmatize(cleaned)

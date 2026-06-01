@@ -32,8 +32,8 @@ REDDIT_CLIENT_ID = _get("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = _get("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = _get("REDDIT_USER_AGENT") or "misinfo-dashboard/1.0"
 
-# YouTube Data API v3
-YOUTUBE_API_KEY = _get("YOUTUBE_API_KEY")
+# YouTube Data API v3 — disabled, not used in current pipeline
+# YOUTUBE_API_KEY = _get("YOUTUBE_API_KEY")
 
 # Optional: NewsAPI
 NEWSAPI_KEY = _get("NEWSAPI_KEY")

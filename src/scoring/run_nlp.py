@@ -33,7 +33,8 @@ def _load_topic_articles(
     exclude_platform: str | None = None,
 ) -> list[dict]:
     query = """
-        SELECT ri.id, ri.title, ri.description, ri.source, ri.url,
+        SELECT ri.id, ri.title, ri.description, ri.body_text,
+               ri.source, ri.url,
                ri.platform, ri.timestamp, ri.engagement_json,
                ri.cleaned_text
         FROM topic_sources ts

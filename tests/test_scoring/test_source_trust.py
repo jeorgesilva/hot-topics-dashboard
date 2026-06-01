@@ -156,6 +156,16 @@ class TestGetTrustScore:
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
             assert get_trust_score("BBC.COM") == 86.0
 
+    def test_unknown_domain_with_conn_uses_tld_resolver(self, db_conn):
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            score = get_trust_score("bundestag.gov", conn=db_conn)
+        assert score == 82.0  # .gov TLD from domain_resolver
+
+    def test_explicit_neutral_takes_priority_over_conn(self, db_conn):
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            score = get_trust_score("bundestag.gov", neutral=30.0, conn=db_conn)
+        assert score == 30.0  # explicit neutral wins over resolver
+
 
 # ---------------------------------------------------------------------------
 # _domain_from_url

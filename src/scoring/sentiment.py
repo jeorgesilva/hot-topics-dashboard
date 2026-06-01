@@ -112,8 +112,10 @@ def _get_pipeline():
         from transformers import pipeline
         _pipeline = pipeline(
             "sentiment-analysis",
-            model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+            model="oliverguhr/german-sentiment-bert",
             top_k=None,
+            truncation=True,
+            max_length=512,
         )
     return _pipeline
 

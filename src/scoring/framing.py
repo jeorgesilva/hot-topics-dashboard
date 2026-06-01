@@ -29,7 +29,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        _model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     return _model
 
 
@@ -52,6 +52,31 @@ def _mean_vector(vectors: list[list[float]]) -> list[float]:
             centroid[i] += val
     n = len(vectors)
     return [x / n for x in centroid]
+
+
+def _intra_cluster_variance(articles: list[ScoredArticle], model) -> float:
+    """Mean cosine distance from centroid — framing diversity within a single tier.
+
+    Used as a fallback when all articles belong to one trust tier and the
+    cross-tier inconsistency signal cannot be computed. A high variance means
+    even the homogeneous tier frames the topic in divergent ways, which is a
+    weaker but still informative misinformation signal.
+
+    Args:
+        articles: Articles in the single available tier.
+        model: Loaded SentenceTransformer instance.
+
+    Returns:
+        Mean cosine distance from centroid in [0.0, 1.0].
+    """
+    texts = [a["cleaned_text"] or a["title"] for a in articles]
+    texts = [t for t in texts if t]
+    if len(texts) < 2:
+        return 0.0
+    embeddings: list[list[float]] = model.encode(texts).tolist()
+    centroid = _mean_vector(embeddings)
+    distances = [max(0.0, 1.0 - _cosine_similarity(emb, centroid)) for emb in embeddings]
+    return round(sum(distances) / len(distances), 4)
 
 
 def _entity_overlap_score(
@@ -132,8 +157,15 @@ def compute_framing(
     ]
 
     if not high_articles or not low_articles:
+        # Only one trust tier present — use intra-cluster embedding variance
+        # as a proxy for framing diversity instead of returning a flat 0.0.
+        single_tier = high_articles or low_articles
+        if single_tier:
+            variance = _intra_cluster_variance(single_tier, _get_model())
+        else:
+            variance = 0.0
         return FramingResult(
-            framing_inconsistency=0.0,
+            framing_inconsistency=variance,
             fact_inconsistency=0.0,
             high_trust_centroid=[],
             low_trust_centroid=[],
