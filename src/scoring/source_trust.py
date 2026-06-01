@@ -30,6 +30,10 @@ _CSV_PATH = _PROJECT_ROOT / "config" / "source_trust.csv"
 NEUTRAL_SCORE: float = 50.0       # used as explicit default in compute_coverage_metrics
 HIGH_TRUST_THRESHOLD: float = 60.0
 
+# Platform sets used by the two scoring tracks.
+VERIFIED_PLATFORMS: list[str] = ["newsapi", "rss", "google_news"]
+SOCIAL_PLATFORMS: list[str] = ["reddit"]
+
 # Scores assigned to domains absent from the trust DB.
 # A missing domain is more likely to be a shell/spam site than a neutral outlet,
 # so we use a penalty below 50 instead of the old neutral default.
@@ -125,6 +129,7 @@ def compute_coverage_metrics(
     *,
     neutral: float = NEUTRAL_SCORE,
     high_trust_threshold: float = HIGH_TRUST_THRESHOLD,
+    platform_filter: list[str] | None = None,
 ) -> dict[str, float | int]:
     """Compute coverage-quality metrics for a single topic.
 
@@ -136,6 +141,9 @@ def compute_coverage_metrics(
         conn: Active database connection with row_factory=sqlite3.Row.
         neutral: Trust score assigned to unknown domains.
         high_trust_threshold: Minimum score to count as a credible source.
+        platform_filter: When provided, only articles whose platform is in
+            this list are included (e.g. ["newsapi", "rss"] for verified
+            track, or ["reddit"] for the social track).
 
     Returns:
         Dict with keys: avg_trust, trust_variance, coverage_breadth,
@@ -143,15 +151,28 @@ def compute_coverage_metrics(
         that meet the credibility threshold (not article count). All default to
         neutral/0 when the topic has no articles.
     """
-    rows = conn.execute(
-        """
-        SELECT ri.url, ri.source
-        FROM topic_sources ts
-        JOIN raw_items ri ON ri.id = ts.item_id
-        WHERE ts.topic_id = ?
-        """,
-        (topic_id,),
-    ).fetchall()
+    if platform_filter:
+        placeholders = ",".join("?" * len(platform_filter))
+        rows = conn.execute(
+            f"""
+            SELECT ri.url, ri.source
+            FROM topic_sources ts
+            JOIN raw_items ri ON ri.id = ts.item_id
+            WHERE ts.topic_id = ?
+              AND ri.platform IN ({placeholders})
+            """,
+            (topic_id, *platform_filter),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT ri.url, ri.source
+            FROM topic_sources ts
+            JOIN raw_items ri ON ri.id = ts.item_id
+            WHERE ts.topic_id = ?
+            """,
+            (topic_id,),
+        ).fetchall()
 
     if not rows:
         return {
@@ -187,11 +208,11 @@ def compute_coverage_metrics(
 
 
 def score_coverage(conn: sqlite3.Connection) -> int:
-    """Compute and persist coverage metrics for every topic.
+    """Compute and persist coverage metrics for every topic — both tracks.
 
-    Upserts avg_trust, trust_variance, coverage_breadth, and coverage_ratio
-    into topic_scores. Leaves Person-A columns (avg_sentiment_extremity,
-    sensationalism_avg, framing_inconsistency) untouched.
+    Verified track (newsapi/rss/google_news) → avg_trust, trust_variance,
+    coverage_breadth, coverage_ratio.
+    Social track (reddit) → social_avg_trust, social_coverage_ratio.
 
     Args:
         conn: Active database connection.
@@ -202,24 +223,34 @@ def score_coverage(conn: sqlite3.Connection) -> int:
     topic_ids = [r["id"] for r in conn.execute("SELECT id FROM topics").fetchall()]
 
     for topic_id in topic_ids:
-        metrics = compute_coverage_metrics(topic_id, conn)
+        verified = compute_coverage_metrics(
+            topic_id, conn, platform_filter=VERIFIED_PLATFORMS
+        )
+        social = compute_coverage_metrics(
+            topic_id, conn, platform_filter=SOCIAL_PLATFORMS
+        )
         conn.execute(
             """
             INSERT INTO topic_scores
-                (topic_id, avg_trust, trust_variance, coverage_breadth, coverage_ratio)
-            VALUES (?, ?, ?, ?, ?)
+                (topic_id, avg_trust, trust_variance, coverage_breadth, coverage_ratio,
+                 social_avg_trust, social_coverage_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(topic_id) DO UPDATE SET
-                avg_trust        = excluded.avg_trust,
-                trust_variance   = excluded.trust_variance,
-                coverage_breadth = excluded.coverage_breadth,
-                coverage_ratio   = excluded.coverage_ratio
+                avg_trust            = excluded.avg_trust,
+                trust_variance       = excluded.trust_variance,
+                coverage_breadth     = excluded.coverage_breadth,
+                coverage_ratio       = excluded.coverage_ratio,
+                social_avg_trust     = excluded.social_avg_trust,
+                social_coverage_ratio = excluded.social_coverage_ratio
             """,
             (
                 topic_id,
-                metrics["avg_trust"],
-                metrics["trust_variance"],
-                metrics["coverage_breadth"],
-                metrics["coverage_ratio"],
+                verified["avg_trust"],
+                verified["trust_variance"],
+                verified["coverage_breadth"],
+                verified["coverage_ratio"],
+                social["avg_trust"],
+                social["coverage_ratio"],
             ),
         )
 

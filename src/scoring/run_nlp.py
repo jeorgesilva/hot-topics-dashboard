@@ -25,18 +25,29 @@ from src.utils.db import get_connection, init_db
 logger = logging.getLogger(__name__)
 
 
-def _load_topic_articles(conn, topic_id: int) -> list[dict]:
-    rows = conn.execute(
-        """
+def _load_topic_articles(
+    conn,
+    topic_id: int,
+    *,
+    platform: str | None = None,
+    exclude_platform: str | None = None,
+) -> list[dict]:
+    query = """
         SELECT ri.id, ri.title, ri.description, ri.source, ri.url,
                ri.platform, ri.timestamp, ri.engagement_json,
                ri.cleaned_text
         FROM topic_sources ts
         JOIN raw_items ri ON ri.id = ts.item_id
         WHERE ts.topic_id = ?
-        """,
-        (topic_id,),
-    ).fetchall()
+    """
+    params: list = [topic_id]
+    if platform:
+        query += " AND ri.platform = ?"
+        params.append(platform)
+    if exclude_platform:
+        query += " AND ri.platform != ?"
+        params.append(exclude_platform)
+    rows = conn.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -54,51 +65,42 @@ def run_nlp_pipeline(db_path=None) -> dict:
     scored = 0
 
     for topic_id in topic_ids:
-        articles = _load_topic_articles(conn, topic_id)
-        if not articles:
-            logger.info("  topic %d: no articles, skipping", topic_id)
+        # ── verified track (NewsAPI + curated RSS, excludes Reddit) ──────────
+        verified = _load_topic_articles(conn, topic_id, exclude_platform="reddit")
+        if not verified:
+            logger.info("  topic %d: no verified articles, skipping", topic_id)
             continue
 
-        logger.info("  topic %d: scoring %d articles...", topic_id, len(articles))
+        logger.info("  topic %d: scoring %d verified articles...", topic_id, len(verified))
 
-        # strip DB-cached cleaned_text so preprocess() can recompute fresh
-        raw_articles = [{k: v for k, v in a.items() if k != "cleaned_text"} for a in articles]
-
-        # Sentiment + sensationalism via RoBERTa
-        scored_articles = score_articles(raw_articles)
+        raw_verified = [{k: v for k, v in a.items() if k != "cleaned_text"} for a in verified]
+        scored_verified = score_articles(raw_verified)
 
         avg_sentiment_extremity = statistics.mean(
-            a["sentiment_extremity"] for a in scored_articles
+            a["sentiment_extremity"] for a in scored_verified
         )
         sensationalism_avg = statistics.mean(
-            a["sensationalism_score"] for a in scored_articles
+            a["sensationalism_score"] for a in scored_verified
         )
-
-        # Framing inconsistency via sentence-transformers
         trust_map = {
             a["source"]: get_trust_score(_domain_from_url(a["url"]) or a["source"])
-            for a in scored_articles
+            for a in scored_verified
         }
-        framing_result = compute_framing(scored_articles, trust_map)
+        framing_result = compute_framing(scored_verified, trust_map)
         framing_inconsistency = framing_result["framing_inconsistency"]
         fact_inconsistency = framing_result["fact_inconsistency"]
-
-        # Attribution vagueness — average over article texts
-        attr_scores = [
+        attribution_vagueness = statistics.mean(
             score_attribution_vagueness(a.get("cleaned_text") or a["title"])
-            for a in scored_articles
-        ]
-        attribution_vagueness = statistics.mean(attr_scores)
+            for a in scored_verified
+        )
 
-        # Update cleaned_text on raw_items
-        for a in scored_articles:
+        for a in scored_verified:
             if a.get("cleaned_text"):
                 conn.execute(
                     "UPDATE raw_items SET cleaned_text = ? WHERE id = ?",
                     (a["cleaned_text"], a["id"]),
                 )
 
-        # Upsert NLP signals into topic_scores
         conn.execute(
             """
             INSERT INTO topic_scores (topic_id, avg_sentiment_extremity,
@@ -121,12 +123,69 @@ def run_nlp_pipeline(db_path=None) -> dict:
                 round(attribution_vagueness, 4),
             ),
         )
-        conn.commit()
-        scored += 1
         logger.info(
-            "    ✓ sentiment_ext=%.3f  sensationalism=%.3f  framing=%.3f  attribution=%.3f",
+            "    verified ✓ sentiment_ext=%.3f  sensationalism=%.3f  framing=%.3f  attribution=%.3f",
             avg_sentiment_extremity, sensationalism_avg, framing_inconsistency, attribution_vagueness,
         )
+
+        # ── social track (Reddit only) ────────────────────────────────────────
+        social = _load_topic_articles(conn, topic_id, platform="reddit")
+        if social:
+            logger.info("  topic %d: scoring %d social articles...", topic_id, len(social))
+            raw_social = [{k: v for k, v in a.items() if k != "cleaned_text"} for a in social]
+            scored_social = score_articles(raw_social)
+
+            social_sentiment = statistics.mean(
+                a["sentiment_extremity"] for a in scored_social
+            )
+            social_sensationalism = statistics.mean(
+                a["sensationalism_score"] for a in scored_social
+            )
+            social_trust_map = {
+                a["source"]: get_trust_score(_domain_from_url(a["url"]) or a["source"])
+                for a in scored_social
+            }
+            social_framing = compute_framing(scored_social, social_trust_map)
+            social_attribution = statistics.mean(
+                score_attribution_vagueness(a.get("cleaned_text") or a["title"])
+                for a in scored_social
+            )
+
+            for a in scored_social:
+                if a.get("cleaned_text"):
+                    conn.execute(
+                        "UPDATE raw_items SET cleaned_text = ? WHERE id = ?",
+                        (a["cleaned_text"], a["id"]),
+                    )
+
+            conn.execute(
+                """
+                UPDATE topic_scores SET
+                    social_avg_sentiment_extremity = ?,
+                    social_sensationalism_avg      = ?,
+                    social_framing_inconsistency   = ?,
+                    social_fact_inconsistency      = ?,
+                    social_attribution_vagueness   = ?
+                WHERE topic_id = ?
+                """,
+                (
+                    round(social_sentiment, 4),
+                    round(social_sensationalism, 4),
+                    round(social_framing["framing_inconsistency"], 4),
+                    round(social_framing["fact_inconsistency"], 4),
+                    round(social_attribution, 4),
+                    topic_id,
+                ),
+            )
+            logger.info(
+                "    social   ✓ sentiment_ext=%.3f  sensationalism=%.3f  framing=%.3f",
+                social_sentiment, social_sensationalism, social_framing["framing_inconsistency"],
+            )
+        else:
+            logger.info("  topic %d: no Reddit articles — social track skipped", topic_id)
+
+        conn.commit()
+        scored += 1
 
     conn.close()
     logger.info("NLP pipeline complete: %d topics scored.", scored)

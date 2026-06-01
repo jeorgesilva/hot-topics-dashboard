@@ -1,0 +1,30 @@
+name,url,trust_score,bias,language
+Tagesschau,https://www.tagesschau.de/index~rss2.xml,91,CENTER,de
+DW Deutsch,https://rss.dw.com/xml/rss-de-all,85,CENTER,de
+Spiegel Online,https://www.spiegel.de/schlagzeilen/index.rss,82,LEFT-CENTER,de
+Süddeutsche Zeitung,https://www.sueddeutsche.de/rss,83,LEFT-CENTER,de
+FAZ,https://www.faz.net/rss/aktuell/,80,RIGHT-CENTER,de
+Zeit Online,https://newsfeed.zeit.de/all,80,LEFT-CENTER,de
+Handelsblatt,https://www.handelsblatt.com/contentexport/feed/schlagzeilen,82,CENTER,de
+Welt,https://www.welt.de/feeds/topnews.rss,65,RIGHT-CENTER,de
+Stern,https://www.stern.de/feed/,68,LEFT-CENTER,de
+Focus Online,https://rss.focus.de/fol/special/rss.html,55,RIGHT-CENTER,de
+n-tv,https://www.n-tv.de/rss,62,CENTER,de
+BILD,https://www.bild.de/rssfeeds/rss3-20745882,feed=alles.bild.html,32,RIGHT,de
+MDR,https://www.mdr.de/nachrichten/index-rss.xml,88,CENTER,de
+BR24,https://www.br.de/nachrichten/rss/nachrichten100.rss,87,CENTER,de
+ZDF Heute,https://www.zdf.de/rss/zdf/nachrichten,90,CENTER,de
+Tagesspiegel,https://www.tagesspiegel.de/contentexport/feed/home,78,LEFT-CENTER,de
+Cicero,https://www.cicero.de/feed,48,RIGHT-CENTER,de
+Junge Freiheit,https://jungefreiheit.de/feed/,15,FAR-RIGHT,de
+Tichys Einblick,https://www.tichyseinblick.de/feed/,18,FAR-RIGHT,de
+Achgut,https://www.achgut.com/feed,20,FAR-RIGHT,de
+RT Deutsch,https://deutsch.rt.com/feeds/news.xml,10,PRO-RUSSIA,de
+Epoch Times DE,https://www.epochtimes.de/feed,18,FAR-RIGHT,de
+Compact Online,https://www.compact-online.de/feed/,8,FAR-RIGHT,de
+PI-News,https://www.pi-news.net/feed/,7,FAR-RIGHT,de
+AUF1,https://auf1.tv/feed/,5,CONSPIRACY,de
+Telepolis,https://www.heise.de/tp/news-atom.xml,45,LEFT,de
+Nachdenkseiten,https://www.nachdenkseiten.de/?feed=rss2,22,LEFT,de
+Rubikon,https://www.rubikon.news/feed,12,CONSPIRACY,de
+KenFM / AUF1 Blog,https://kenfm.de/feed/,8,CONSPIRACY,de
