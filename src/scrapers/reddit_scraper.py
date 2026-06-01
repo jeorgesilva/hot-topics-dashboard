@@ -404,8 +404,9 @@ def enrich_with_comments(
         item for item in items
         if not item.get("description") and _extract_post_id(item.get("url", ""))
     ]
-    if not to_enrich:
+    if getattr(enrich_with_comments, "_oauth_required", False):
         return
+
     logger.debug("Attempting comment enrichment for %d Reddit posts...", len(to_enrich))
     enriched = 0
     for i, item in enumerate(to_enrich):
@@ -414,9 +415,9 @@ def enrich_with_comments(
         try:
             text = _fetch_post_comments(item["url"], max_comments=max_comments)
         except _RedditAuthError:
+            enrich_with_comments._oauth_required = True  # type: ignore[attr-defined]
             logger.debug(
-                "Reddit JSON API requires OAuth — comment enrichment unavailable. "
-                "Add REDDIT_CLIENT_ID/SECRET to .env and use PRAW to enable this feature."
+                "Reddit JSON API requires OAuth — comment enrichment disabled for this run."
             )
             return
         if text:
