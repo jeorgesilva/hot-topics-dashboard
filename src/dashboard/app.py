@@ -623,7 +623,6 @@ def _render_social_track(row: pd.Series) -> None:
         return
 
     social_grade = grade_topic(social_risk)
-    social_grade_colour = _GRADE_COLOUR.get(social_grade, "#999")
     div_colour = "#e74c3c" if (div_val or 0) >= 0.3 else "#e67e22" if (div_val or 0) >= 0.15 else "#2ecc71"
 
     col_v, col_s, col_d = st.columns(3)
