@@ -256,6 +256,57 @@ class TestComputeCoverageMetrics:
 
 
 # ---------------------------------------------------------------------------
+# compute_coverage_metrics — platform_filter
+# ---------------------------------------------------------------------------
+
+class TestComputeCoverageMetricsPlatformFilter:
+    def test_verified_filter_excludes_reddit(self, db_conn):
+        items = [
+            _make_item("v1", "https://reuters.com/a", platform="newsapi"),
+            _make_item("r1", "https://www.reddit.com/r/de/comments/x/", platform="reddit"),
+        ]
+        insert_items(db_conn, items)
+        with db_conn:
+            db_conn.execute(
+                "INSERT INTO topics (id, label, created_at, item_count) VALUES (5, 'T', '2026-06-01T00:00:00Z', 2)"
+            )
+            db_conn.executemany(
+                "INSERT INTO topic_sources (topic_id, item_id) VALUES (5, ?)",
+                [("v1",), ("r1",)],
+            )
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            m = compute_coverage_metrics(5, db_conn, platform_filter=["newsapi", "rss", "google_news"])
+        # Only reuters.com (newsapi) is included; reddit is excluded
+        assert m["avg_trust"] == pytest.approx(94.0, abs=0.1)
+
+    def test_social_filter_includes_only_reddit(self, db_conn):
+        items = [
+            _make_item("v2", "https://reuters.com/b", platform="newsapi"),
+            _make_item("r2", "https://www.reddit.com/r/de/comments/y/", platform="reddit"),
+        ]
+        insert_items(db_conn, items)
+        with db_conn:
+            db_conn.execute(
+                "INSERT INTO topics (id, label, created_at, item_count) VALUES (6, 'T', '2026-06-01T00:00:00Z', 2)"
+            )
+            db_conn.executemany(
+                "INSERT INTO topic_sources (topic_id, item_id) VALUES (6, ?)",
+                [("v2",), ("r2",)],
+            )
+        # reddit.com is not in _SAMPLE_DB → falls back to _UNKNOWN_SCORE (45.0)
+        m = compute_coverage_metrics(6, db_conn, platform_filter=["reddit"])
+        assert m["avg_trust"] is not None
+        assert m["coverage_breadth"] == 0  # reddit.com trust < 60
+
+    def test_no_filter_includes_all_platforms(self, seeded_db):
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            m_all = compute_coverage_metrics(0, seeded_db)
+            m_filtered = compute_coverage_metrics(0, seeded_db, platform_filter=["newsapi"])
+        # With all platforms the avg includes infowars (trust=2); newsapi-only skips it
+        assert m_all["avg_trust"] < m_filtered["avg_trust"] or m_all["avg_trust"] == m_filtered["avg_trust"]
+
+
+# ---------------------------------------------------------------------------
 # score_coverage (integration)
 # ---------------------------------------------------------------------------
 
@@ -280,3 +331,27 @@ class TestScoreCoverage:
     def test_empty_topics_returns_zero(self, db_conn):
         count = score_coverage(db_conn)
         assert count == 0
+
+    def test_writes_social_avg_trust_column(self, db_conn):
+        items = [
+            _make_item("n1", "https://reuters.com/c", platform="newsapi"),
+            _make_item("s1", "https://www.reddit.com/r/de/comments/z/", platform="reddit"),
+        ]
+        insert_items(db_conn, items)
+        with db_conn:
+            db_conn.execute(
+                "INSERT INTO topics (id, label, created_at, item_count) VALUES (10, 'T', '2026-06-01T00:00:00Z', 2)"
+            )
+            db_conn.executemany(
+                "INSERT INTO topic_sources (topic_id, item_id) VALUES (10, ?)",
+                [("n1",), ("s1",)],
+            )
+        with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
+            score_coverage(db_conn)
+        row = db_conn.execute(
+            "SELECT avg_trust, social_avg_trust, social_coverage_ratio FROM topic_scores WHERE topic_id = 10"
+        ).fetchone()
+        assert row is not None
+        assert row["avg_trust"] is not None         # verified track (reuters only)
+        assert row["social_avg_trust"] is not None  # social track (reddit only)
+        assert row["social_coverage_ratio"] is not None

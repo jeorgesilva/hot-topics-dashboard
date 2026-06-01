@@ -241,6 +241,91 @@ class TestComputeComposite:
 
 
 # ---------------------------------------------------------------------------
+# compute_composite — social track and divergence
+# ---------------------------------------------------------------------------
+
+class TestComputeCompositeSocialTrack:
+    def test_social_risk_computed_when_social_signals_present(self, db_conn):
+        insert_items(db_conn, [_make_item("s1")])
+        _seed_topic(db_conn, 10, ["s1"],
+                    avg_trust=80.0, coverage_ratio=0.8,
+                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
+                    framing_inconsistency=0.1,
+                    social_avg_trust=45.0, social_coverage_ratio=0.0,
+                    social_avg_sentiment_extremity=0.7,
+                    social_sensationalism_avg=0.6,
+                    social_framing_inconsistency=0.5)
+        compute_composite(db_conn)
+        row = db_conn.execute(
+            "SELECT composite_risk, social_risk, narrative_divergence FROM topic_scores WHERE topic_id = 10"
+        ).fetchone()
+        assert row["composite_risk"] is not None
+        assert row["social_risk"] is not None
+        assert 0.0 <= row["social_risk"] <= 1.0
+        assert row["narrative_divergence"] is not None
+
+    def test_social_risk_null_when_social_signals_missing(self, db_conn):
+        insert_items(db_conn, [_make_item("s2")])
+        _seed_topic(db_conn, 11, ["s2"],
+                    avg_trust=80.0, coverage_ratio=0.8,
+                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
+                    framing_inconsistency=0.1)
+        compute_composite(db_conn)
+        row = db_conn.execute(
+            "SELECT social_risk, narrative_divergence FROM topic_scores WHERE topic_id = 11"
+        ).fetchone()
+        assert row["social_risk"] is None
+        assert row["narrative_divergence"] is None
+
+    def test_narrative_divergence_is_abs_difference(self, db_conn):
+        insert_items(db_conn, [_make_item("s3")])
+        verified_risk = compute_risk(
+            avg_trust=80.0, avg_sentiment_extremity=0.1,
+            coverage_ratio=0.8, framing_inconsistency=0.1, sensationalism_avg=0.1,
+        )
+        social_risk_val = compute_risk(
+            avg_trust=45.0, avg_sentiment_extremity=0.7,
+            coverage_ratio=0.0, framing_inconsistency=0.5, sensationalism_avg=0.6,
+        )
+        _seed_topic(db_conn, 12, ["s3"],
+                    avg_trust=80.0, coverage_ratio=0.8,
+                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
+                    framing_inconsistency=0.1,
+                    social_avg_trust=45.0, social_coverage_ratio=0.0,
+                    social_avg_sentiment_extremity=0.7,
+                    social_sensationalism_avg=0.6,
+                    social_framing_inconsistency=0.5)
+        compute_composite(db_conn)
+        row = db_conn.execute(
+            "SELECT composite_risk, social_risk, narrative_divergence FROM topic_scores WHERE topic_id = 12"
+        ).fetchone()
+        expected_div = abs(row["composite_risk"] - row["social_risk"])
+        assert row["narrative_divergence"] == pytest.approx(expected_div, abs=1e-5)
+
+    def test_higher_social_sensationalism_raises_social_risk(self, db_conn):
+        insert_items(db_conn, [_make_item("s4"), _make_item("s5")])
+        base_kwargs = dict(
+            avg_trust=70.0, coverage_ratio=0.7,
+            avg_sentiment_extremity=0.2, sensationalism_avg=0.2,
+            framing_inconsistency=0.2,
+            social_avg_trust=50.0, social_coverage_ratio=0.1,
+            social_framing_inconsistency=0.3,
+        )
+        _seed_topic(db_conn, 20, ["s4"], **base_kwargs,
+                    social_avg_sentiment_extremity=0.2, social_sensationalism_avg=0.2)
+        _seed_topic(db_conn, 21, ["s5"], **base_kwargs,
+                    social_avg_sentiment_extremity=0.8, social_sensationalism_avg=0.9)
+        compute_composite(db_conn)
+        row_low = db_conn.execute(
+            "SELECT social_risk FROM topic_scores WHERE topic_id = 20"
+        ).fetchone()
+        row_high = db_conn.execute(
+            "SELECT social_risk FROM topic_scores WHERE topic_id = 21"
+        ).fetchone()
+        assert row_high["social_risk"] > row_low["social_risk"]
+
+
+# ---------------------------------------------------------------------------
 # score_all_topics (integration)
 # ---------------------------------------------------------------------------
 
