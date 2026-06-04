@@ -67,14 +67,14 @@ _SENSATIONAL_TERMS: frozenset[str] = frozenset({
 # word choices. Compiled once at import time for performance.
 _CLICKBAIT_PATTERNS: tuple[re.Pattern, ...] = (
     # English patterns
-    re.compile(r"you won(?:’|’)?t believe", re.IGNORECASE),
+    re.compile(r"you won(?:'|’)?t believe", re.IGNORECASE),
     re.compile(r"the (real|true|hidden|secret|shocking) (reason|truth|story)", re.IGNORECASE),
-    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:’|’)?t want you", re.IGNORECASE),
+    re.compile(r"(they|he|she|doctors?|scientists?|experts?|the government).{0,20}don(?:'|’)?t want you", re.IGNORECASE),
     re.compile(r"is .{3,40}(hiding|lying|corrupt\b|guilty\b)", re.IGNORECASE),
     re.compile(r"\d+\s+(things?|reasons?|ways?|facts?|secrets?).{0,25}(shocking|amaz|unbeliev|crazy|wild)", re.IGNORECASE),
     re.compile(r"(finally|now|just)\s+(revealed|exposed|confirmed|proven|admitted)", re.IGNORECASE),
-    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:’|’)?t|ignor)", re.IGNORECASE),
-    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:’|’)?t|won(?:’|’)?t|refuse to)", re.IGNORECASE),
+    re.compile(r"(mainstream media|msm|fake news).{0,30}(lies?|hiding|won(?:'|’)?t|ignor)", re.IGNORECASE),
+    re.compile(r"what (they|the media|scientists?|doctors?|experts?) (don(?:'|’)?t|won(?:'|’)?t|refuse to)", re.IGNORECASE),
     # German patterns
     re.compile(r"das wollen sie nicht", re.IGNORECASE),                              # "they don’t want you to know"
     re.compile(r"(das|das ist) der (wahre?|eigentliche?|geheime?) grund", re.IGNORECASE),  # "the real reason"
@@ -114,8 +114,7 @@ def _get_pipeline():
             "sentiment-analysis",
             model="oliverguhr/german-sentiment-bert",
             top_k=None,
-            truncation=True,
-            max_length=512,
+            tokenizer_kwargs={"truncation": True, "max_length": 512},
         )
     return _pipeline
 
@@ -226,8 +225,17 @@ def score_articles(items: list[RawItem], batch_size: int = 16) -> list[ScoredArt
     if not items:
         return []
 
-    cleaned_items = [preprocess(item) for item in items]
-    texts = [c["cleaned_text"] or item["title"] for c, item in zip(cleaned_items, items)]
+    texts = []
+    for item in items:
+        existing = item.get("cleaned_text")  # type: ignore[typeddict-item]
+        if existing:
+            texts.append(existing)
+        else:
+            # Items loaded from DB carry cleaned_text=None; strip it so that
+            # preprocess(**item, cleaned_text=...) doesn't get a duplicate kwarg.
+            item_stripped = {k: v for k, v in item.items() if k != "cleaned_text"}
+            cleaned = preprocess(item_stripped)  # type: ignore[arg-type]
+            texts.append(cleaned["cleaned_text"] or item["title"])
 
     pipe = _get_pipeline()
     raw_results = pipe(texts, batch_size=batch_size)
