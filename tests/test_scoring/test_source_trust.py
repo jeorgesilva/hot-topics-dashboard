@@ -32,11 +32,11 @@ from src.utils.models import RawItem
 # ---------------------------------------------------------------------------
 
 _SAMPLE_CSV = """\
-domain,trust_score,factual_reporting,bias
-reuters.com,94,VERY HIGH,CENTER
-bbc.com,86,HIGH,LEFT-CENTER
-foxnews.com,38,MIXED,RIGHT
-infowars.com,2,VERY LOW,RIGHT
+domain,trust_score,factual_rating,bias_label,source,confidence,mbfc_url,notes
+reuters.com,94,VERY HIGH,CENTER,MBFC,low,,original MBFC entry — not re-verified
+bbc.com,86,HIGH,LEFT-CENTER,MBFC,low,,original MBFC entry — not re-verified
+foxnews.com,38,MIXED,RIGHT,MBFC,low,,original MBFC entry — not re-verified
+infowars.com,2,VERY LOW,RIGHT,MBFC,low,,original MBFC entry — not re-verified
 """
 
 _SAMPLE_DB = {
@@ -101,7 +101,7 @@ class TestLoadTrustDb:
 
     def test_strips_www_prefix(self, tmp_path):
         csv_path = tmp_path / "trust.csv"
-        csv_path.write_text("domain,trust_score,factual_reporting,bias\nwww.bbc.com,86,HIGH,CENTER\n")
+        csv_path.write_text("domain,trust_score,factual_rating,bias_label,source,confidence,mbfc_url,notes\nwww.bbc.com,86,HIGH,CENTER,MBFC,low,,\n")
         db = _load_trust_db(csv_path)
         assert "bbc.com" in db
         assert "www.bbc.com" not in db
@@ -112,7 +112,7 @@ class TestLoadTrustDb:
 
     def test_skips_non_numeric_score(self, tmp_path):
         csv_path = tmp_path / "trust.csv"
-        csv_path.write_text("domain,trust_score,factual_reporting,bias\nbad.com,NOT_A_NUMBER,HIGH,CENTER\n")
+        csv_path.write_text("domain,trust_score,factual_rating,bias_label,source,confidence,mbfc_url,notes\nbad.com,NOT_A_NUMBER,HIGH,CENTER,MBFC,low,,\n")
         db = _load_trust_db(csv_path)
         assert "bad.com" not in db
 
