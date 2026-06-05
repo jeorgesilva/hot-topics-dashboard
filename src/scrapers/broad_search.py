@@ -36,6 +36,28 @@ SOCIAL_DOMAINS: frozenset[str] = frozenset({
     "t.me", "telegram.org",
 })
 
+# URL path prefixes that indicate listing/category pages rather than individual articles.
+# Checked against the first non-empty path segment only (e.g. /themen/bundesregierung → "themen").
+_LISTING_PATH_PREFIXES: frozenset[str] = frozenset({
+    # German listing patterns
+    "themen", "thema",
+    "tag", "tags",
+    "kategorie", "kategorien",
+    "rubrik", "rubriken",
+    "schlagwort", "schlagwoerter",
+    "ressort",
+    "autor", "autoren",
+    "archiv",
+    # English listing patterns
+    "topic", "topics",
+    "category", "categories",
+    "section", "sections",
+    "author", "authors",
+    "search",
+    "suche",
+    "newsletter",
+})
+
 # Broad queries used by the Option-A discovery pipeline to seed topic clustering
 # from the open web instead of a curated RSS source.
 _BROAD_DISCOVERY_QUERIES: list[str] = [
@@ -67,6 +89,19 @@ def _is_social_domain(url: str) -> bool:
     if netloc.startswith("www."):
         netloc = netloc[4:]
     return netloc in SOCIAL_DOMAINS
+
+
+def _is_listing_url(url: str) -> bool:
+    """Return True if the URL looks like a category/tag/listing page, not an individual article.
+
+    Checks the first non-empty path segment against known listing prefixes.
+    E.g. https://www.handelsblatt.com/themen/bundesregierung → "themen" → True.
+    """
+    path = urlparse(url).path
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return False
+    return segments[0].lower() in _LISTING_PATH_PREFIXES
 
 
 def _searxng_search(query: str, num_results: int, base_url: str) -> list[dict]:
@@ -234,6 +269,7 @@ def search_topic(
     Post-processing applied to both sources:
         - Deduplication by _normalize_url
         - Social domain filtering (SOCIAL_DOMAINS)
+        - Listing/category page filtering (_LISTING_PATH_PREFIXES)
         - Truncation to num_results
 
     Args:
@@ -274,6 +310,9 @@ def search_topic(
         if not url:
             continue
         if _is_social_domain(url):
+            continue
+        if _is_listing_url(url):
+            logger.debug("dropping listing/category URL: %s", url)
             continue
         nurl = _normalize_url(url)
         if nurl in seen_norms:
