@@ -46,6 +46,23 @@ First-time setup (after `pip install -r requirements.txt`):
 - Optionally set `SEARXNG_URL` in `.env` for a self-hosted SearXNG instance (DDG is the fallback)
 - To run SearXNG locally: `docker-compose up -d` — starts `hot-topics-searxng` on port 8080; config lives in `config/searxng/settings.yml`
 
+## Source trust CSV schema
+
+`config/source_trust.csv` — 114 entries, read by `source_trust._load_trust_db()`.
+
+| Column | Values |
+|---|---|
+| `domain` | bare domain, no `www.` |
+| `trust_score` | 0–100 float — **load-bearing in scoring pipeline** |
+| `factual_rating` | VERY HIGH, HIGH, MOSTLY FACTUAL, MIXED, LOW, VERY LOW, CONSPIRACY, null |
+| `bias_label` | LEFT, LEFT-CENTER, CENTER, RIGHT-CENTER, RIGHT, CONSPIRACY-PSEUDOSCIENCE, null |
+| `source` | MBFC, Presserat, BDZV, Correctiv, manual_estimate |
+| `confidence` | verified, low |
+| `mbfc_url` | full URL or empty |
+| `notes` | free text or empty |
+
+101 entries carry `source=MBFC, confidence=low` (original dataset, not re-verified). 8 entries with non-standard bias labels are `source=manual_estimate`. Do not remove `trust_score` — it drives `article_scorer.score_article()`.
+
 ## Domain trust scoring
 
 `domain_resolver.py` scores domains absent from `config/source_trust.csv` (MBFC-curated) using four live signals:
@@ -60,6 +77,17 @@ First-time setup (after `pip install -r requirements.txt`):
 Google Safe Browsing is checked first — flagged domains short-circuit to a score of 5 regardless of other signals.
 
 Score range for unknown domains: **30–82** (cannot exceed top MBFC-rated outlets). Results are cached in `domain_trust_cache` (SQLite) with a **7-day TTL** so each domain is re-evaluated weekly.
+
+## Runtime source lookup (`source_lookup.py`)
+
+`source_lookup.get_source_data(domain, csv_path, db_path)` resolves editorial metadata for display in the dashboard. Resolution order:
+
+1. Static CSV — returned immediately if `confidence=verified`.
+2. `source_lookup_cache` (SQLite, 30-day TTL) — avoids repeated network calls.
+3. SearXNG → MBFC page fetch — query `"{domain}" site:mediabiasfactcheck.com`, parse "FACTUAL REPORTING:" and "BIAS:" from body text. 1.5 s sleep between requests.
+4. Result cached; if MBFC fails for a domain already in the CSV, the CSV entry is returned as fallback.
+
+`generate_disclaimer(data)` returns the human-readable caption string shown below each article card. `domain_in_static_csv(domain)` is used by the dashboard to distinguish "known outlet, lookup failed" (shows "Source data unavailable") from unknown domains (shows nothing).
 
 ## Broad discovery pipeline (default)
 
@@ -101,10 +129,10 @@ composite_risk = 0.40 × avg_article_risk + 0.35 × framing_inconsistency
 - `src/orchestrator.py` — unified single-process entry point (runs all three pipeline steps with NLP models loaded once)
 - `src/scrapers/` — `broad_search` (SearXNG/DDG discovery + `discover_articles_broad`), `google_rss_scraper` (used only in `--no-broad-search` mode), `rss_scraper` (45 curated German feeds, `--no-broad-search` only), `newsapi_scraper`, `youtube_scraper`, `article_fetcher` (trafilatura full-text), `run_all` (pipeline orchestration; `_cluster_into_topics` for broad mode, `_fetch_articles_for_topic` for curated mode)
 - `src/nlp/` — spaCy preprocessing (`preprocessor`), NER (`ner`, de_core_news_lg), keyword extraction (`keywords`), search query builder (`topic_query`)
-- `src/scoring/` — `source_trust` (MBFC CSV + coverage metrics), `domain_resolver` (live signals + 7-day TTL SQLite cache), `sentiment` (german-sentiment-bert), `framing` (sentence embeddings), `attribution` (vagueness patterns), `article_scorer` (per-article risk: 4 signals), `compute_scores` (composite_risk, social_risk, narrative_divergence)
+- `src/scoring/` — `source_trust` (MBFC CSV + coverage metrics), `domain_resolver` (live signals + 7-day TTL SQLite cache), `source_lookup` (runtime MBFC lookup + 30-day cache + disclaimer generator), `sentiment` (german-sentiment-bert), `framing` (sentence embeddings), `attribution` (vagueness patterns), `article_scorer` (per-article risk: 4 signals), `compute_scores` (composite_risk, social_risk, narrative_divergence)
 - `src/dashboard/` — Streamlit SPA (home/topic/article views), i18n.py (German strings), Plotly charts
 - `src/utils/` — DB helpers (SQLite), RawItem/ScoredTopic TypedDicts, dedup (RapidFuzz)
-- `config/` — `.env.template`, `rss_sources.csv` (45 feeds, used only in `--no-broad-search` mode), `source_trust.csv` (MBFC), `searxng/settings.yml`
+- `config/` — `.env.template`, `rss_sources.csv` (45 feeds, used only in `--no-broad-search` mode), `source_trust.csv` (114 entries; schema: `domain, trust_score, factual_rating, bias_label, source, confidence, mbfc_url, notes`), `searxng/settings.yml`
 - `data/dashboard.db` — full run history + live scores (gitignored)
 - `notebooks/` — validation, EDA, scoring evaluation
 
@@ -131,6 +159,8 @@ topic_scores   topic_id → topics, all NLP + composite signals
                  social_fact_inconsistency, social_risk
                cross-track: narrative_divergence
 domain_trust_cache  domain, trust_score, method, cached_at (7-day TTL)
+source_lookup_cache domain, factual_rating, bias_label, source, confidence,
+                    mbfc_url, notes, fetched_at (30-day TTL)
 ```
 
 - `start_run(conn)` / `complete_run(conn, run_id)` in `src/utils/db.py` bookend each pipeline call.
