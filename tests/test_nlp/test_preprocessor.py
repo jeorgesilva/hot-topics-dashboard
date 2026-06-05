@@ -66,13 +66,13 @@ class TestTokenizeAndLemmatize:
         assert isinstance(lemmas, list)
 
     def test_removes_stop_words(self):
-        tokens, _ = tokenize_and_lemmatize("the scientists and the doctors")
-        assert "the" not in tokens
-        assert "and" not in tokens
+        tokens, _ = tokenize_and_lemmatize("die Forscher und die Ärzte")
+        assert "die" not in tokens
+        assert "und" not in tokens
 
     def test_lemmatization_applied(self):
-        _, lemmas = tokenize_and_lemmatize("scientists are discovering variants")
-        assert "scientist" in lemmas or "discover" in lemmas
+        _, lemmas = tokenize_and_lemmatize("Forscher entdeckten neue Varianten")
+        assert "entdecken" in lemmas or "Forscher" in lemmas
 
     def test_non_alpha_tokens_excluded(self):
         tokens, _ = tokenize_and_lemmatize("hello 123 world !!!")

@@ -54,7 +54,7 @@ class _MockEncoder:
         self._queue: list[list[float]] = list(vectors)
         self._offset = 0
 
-    def encode(self, texts: list[str]) -> np.ndarray:
+    def encode(self, texts: list[str], **kwargs) -> np.ndarray:
         n = len(texts)
         batch = self._queue[self._offset: self._offset + n]
         self._offset += n
@@ -75,6 +75,22 @@ def identical_model(monkeypatch, empty_ner):
     """Both tiers get the same embedding → inconsistency ≈ 0."""
     vec = [1.0, 0.0, 0.0]
     encoder = _MockEncoder(*([vec] * 20))
+    monkeypatch.setattr("src.scoring.framing._get_model", lambda: encoder)
+
+
+@pytest.fixture
+def single_tier_identical_model(monkeypatch, empty_ner):
+    """Single-tier fallback: identical embeddings → intra-cluster variance ≈ 0."""
+    vec = [1.0, 0.0, 0.0]
+    encoder = _MockEncoder(*([vec] * 20))
+    monkeypatch.setattr("src.scoring.framing._get_model", lambda: encoder)
+
+
+@pytest.fixture
+def single_tier_diverse_model(monkeypatch, empty_ner):
+    """Single-tier fallback: orthogonal embeddings → intra-cluster variance > 0."""
+    vecs = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    encoder = _MockEncoder(*(vecs * 10))
     monkeypatch.setattr("src.scoring.framing._get_model", lambda: encoder)
 
 
@@ -152,19 +168,24 @@ class TestComputeFraming:
         assert result["high_trust_articles"] == []
         assert result["low_trust_articles"] == []
 
-    def test_all_high_trust_returns_fallback(self):
+    def test_all_high_trust_identical_variance_near_zero(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
         result = compute_framing(articles, {"bbc.com": 90.0})
-        assert result["framing_inconsistency"] == 0.0
+        assert result["framing_inconsistency"] < 0.05
         assert len(result["high_trust_articles"]) == 3
         assert result["low_trust_articles"] == []
 
-    def test_all_low_trust_returns_fallback(self):
+    def test_all_low_trust_identical_variance_near_zero(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "tabloid.net") for i in range(3)]
         result = compute_framing(articles, {"tabloid.net": 20.0})
-        assert result["framing_inconsistency"] == 0.0
+        assert result["framing_inconsistency"] < 0.05
         assert result["high_trust_articles"] == []
         assert len(result["low_trust_articles"]) == 3
+
+    def test_single_tier_diverse_variance_nonzero(self, single_tier_diverse_model):
+        articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
+        result = compute_framing(articles, {"bbc.com": 90.0})
+        assert result["framing_inconsistency"] > 0.0
 
     def test_identical_framing_near_zero(self, identical_model):
         articles = (
@@ -237,7 +258,7 @@ class TestComputeFraming:
         result = compute_framing([], {})
         assert result["fact_inconsistency"] == 0.0
 
-    def test_fact_inconsistency_zero_fallback_one_tier(self):
+    def test_fact_inconsistency_zero_fallback_one_tier(self, single_tier_identical_model):
         articles = [_make_scored(f"a{i}", "bbc.com") for i in range(3)]
         result = compute_framing(articles, {"bbc.com": 90.0})
         assert result["fact_inconsistency"] == 0.0
@@ -335,3 +356,60 @@ class TestEntityOverlapScore:
         high = [_make_scored("h0", "bbc.com", cleaned_text="t")]
         low = [_make_scored("l0", "fake.net", cleaned_text="t")]
         assert isinstance(_entity_overlap_score(high, low), float)
+
+
+# ---------------------------------------------------------------------------
+# Batch encoding contract test
+# ---------------------------------------------------------------------------
+
+class _RecordingEncoder:
+    """Wraps a _MockEncoder and records all encode() call arguments."""
+
+    def __init__(self, inner: _MockEncoder):
+        self._inner = inner
+        self.calls: list = []
+
+    def encode(self, texts, **kwargs) -> np.ndarray:
+        self.calls.append(texts)
+        return self._inner.encode(texts, **kwargs)
+
+
+class TestBatchEncoding:
+    def test_encode_called_with_list_two_tier(self, monkeypatch):
+        """Both tiers: encode() must receive a list, never a bare string."""
+        vec = [1.0, 0.0, 0.0]
+        inner = _MockEncoder(*([vec] * 20))
+        recorder = _RecordingEncoder(inner)
+        monkeypatch.setattr("src.scoring.framing._get_model", lambda: recorder)
+        monkeypatch.setattr("src.scoring.framing.extract_entities", lambda _: _EMPTY_NER)
+
+        articles = [
+            _make_scored(f"a{i}", "bbc.com" if i % 2 == 0 else "tabloid.net")
+            for i in range(10)
+        ]
+        trust = {"bbc.com": 90.0, "tabloid.net": 20.0}
+        compute_framing(articles, trust)
+
+        assert len(recorder.calls) >= 2, "encode() should be called at least twice (one per tier)"
+        for arg in recorder.calls:
+            assert isinstance(arg, list), (
+                f"encode() received {type(arg).__name__!r}, expected list — "
+                "must not be called per-article in a loop"
+            )
+
+    def test_encode_called_with_list_single_tier(self, monkeypatch):
+        """Single-tier fallback (_intra_cluster_variance): encode() still gets a list."""
+        vec = [1.0, 0.0, 0.0]
+        inner = _MockEncoder(*([vec] * 20))
+        recorder = _RecordingEncoder(inner)
+        monkeypatch.setattr("src.scoring.framing._get_model", lambda: recorder)
+        monkeypatch.setattr("src.scoring.framing.extract_entities", lambda _: _EMPTY_NER)
+
+        articles = [_make_scored(f"a{i}", "bbc.com") for i in range(5)]
+        trust = {"bbc.com": 90.0}
+        compute_framing(articles, trust)
+
+        for arg in recorder.calls:
+            assert isinstance(arg, list), (
+                f"encode() received {type(arg).__name__!r}, expected list"
+            )

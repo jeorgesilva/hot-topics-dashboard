@@ -4,6 +4,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, TypedDict
 
+import numpy as np
+
 from src.nlp.ner import extract_entities
 
 if TYPE_CHECKING:
@@ -29,7 +31,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        _model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
     return _model
 
 
@@ -52,6 +54,31 @@ def _mean_vector(vectors: list[list[float]]) -> list[float]:
             centroid[i] += val
     n = len(vectors)
     return [x / n for x in centroid]
+
+
+def _intra_cluster_variance(articles: list[ScoredArticle], model) -> float:
+    """Mean cosine distance from centroid — framing diversity within a single tier.
+
+    Used as a fallback when all articles belong to one trust tier and the
+    cross-tier inconsistency signal cannot be computed. A high variance means
+    even the homogeneous tier frames the topic in divergent ways, which is a
+    weaker but still informative misinformation signal.
+
+    Args:
+        articles: Articles in the single available tier.
+        model: Loaded SentenceTransformer instance.
+
+    Returns:
+        Mean cosine distance from centroid in [0.0, 1.0].
+    """
+    texts = [a["cleaned_text"] or a["title"] for a in articles]
+    texts = [t for t in texts if t]
+    if len(texts) < 2:
+        return 0.0
+    embeddings: list[list[float]] = model.encode(texts, batch_size=32, show_progress_bar=False).tolist()
+    centroid = _mean_vector(embeddings)
+    distances = [max(0.0, 1.0 - _cosine_similarity(emb, centroid)) for emb in embeddings]
+    return round(sum(distances) / len(distances), 4)
 
 
 def _entity_overlap_score(
@@ -132,8 +159,15 @@ def compute_framing(
     ]
 
     if not high_articles or not low_articles:
+        # Only one trust tier present — use intra-cluster embedding variance
+        # as a proxy for framing diversity instead of returning a flat 0.0.
+        single_tier = high_articles or low_articles
+        if single_tier:
+            variance = _intra_cluster_variance(single_tier, _get_model())
+        else:
+            variance = 0.0
         return FramingResult(
-            framing_inconsistency=0.0,
+            framing_inconsistency=variance,
             fact_inconsistency=0.0,
             high_trust_centroid=[],
             low_trust_centroid=[],
@@ -143,14 +177,32 @@ def compute_framing(
 
     model = _get_model()
 
-    high_texts = [a["cleaned_text"] or a["title"] for a in high_articles]
-    low_texts = [a["cleaned_text"] or a["title"] for a in low_articles]
+    high_texts = [
+        a["cleaned_text"] or a["title"] for a in high_articles
+        if a.get("cleaned_text") or a.get("title")
+    ]
+    low_texts = [
+        a["cleaned_text"] or a["title"] for a in low_articles
+        if a.get("cleaned_text") or a.get("title")
+    ]
 
-    high_embeddings: list[list[float]] = model.encode(high_texts).tolist()
-    low_embeddings: list[list[float]] = model.encode(low_texts).tolist()
+    if not high_texts or not low_texts:
+        single_tier = high_articles or low_articles
+        variance = _intra_cluster_variance(single_tier, model) if single_tier else 0.0
+        return FramingResult(
+            framing_inconsistency=variance,
+            fact_inconsistency=0.0,
+            high_trust_centroid=[],
+            low_trust_centroid=[],
+            high_trust_articles=[a["url"] for a in high_articles],
+            low_trust_articles=[a["url"] for a in low_articles],
+        )
 
-    high_centroid = _mean_vector(high_embeddings)
-    low_centroid = _mean_vector(low_embeddings)
+    high_embeddings = model.encode(high_texts, batch_size=32, show_progress_bar=False)
+    low_embeddings = model.encode(low_texts, batch_size=32, show_progress_bar=False)
+
+    high_centroid: list[float] = np.mean(high_embeddings, axis=0).tolist()
+    low_centroid: list[float] = np.mean(low_embeddings, axis=0).tolist()
 
     similarity = _cosine_similarity(high_centroid, low_centroid)
     inconsistency = max(0.0, min(1.0, round(1.0 - similarity, 4)))

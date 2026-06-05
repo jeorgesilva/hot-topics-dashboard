@@ -6,6 +6,7 @@ full trust spectrum — from ARD/ZDF (trust ~90) to fringe/conspiracy sites
 expanded without touching code.
 
 No API key required. Uses requests + stdlib XML parsing.
+Feeds are fetched concurrently via ThreadPoolExecutor (max_workers=20).
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import hashlib
 import logging
 import re
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from pathlib import Path
 
 import requests
@@ -177,16 +180,48 @@ def load_rss_sources(csv_path: Path | None = None) -> list[dict]:
     return sources
 
 
+def _fetch_single_feed(source: dict, days_back: int, max_per_feed: int) -> list[RawItem]:
+    """Fetch and parse one RSS feed, returning up to max_per_feed items.
+
+    All errors are caught and logged so a single dead feed never propagates
+    an exception to the ThreadPoolExecutor caller.
+
+    Args:
+        source: Dict with at least 'name' and 'url' keys from rss_sources.csv.
+        days_back: Discard articles older than this many days.
+        max_per_feed: Hard cap on items returned from this feed.
+
+    Returns:
+        List of RawItems (may be empty on error or when feed is stale).
+    """
+    name = source["name"]
+    feed_url = source["url"]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    try:
+        resp = requests.get(feed_url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException:
+        logger.warning("Failed to fetch RSS feed '%s' (%s)", name, feed_url[:60])
+        return []
+
+    items = _parse_feed(resp.text, name, cutoff)
+    result = items[:max_per_feed]
+    logger.info("  RSS %-30s → %d articles", name, len(result))
+    return result
+
+
 def scrape_rss_sources(
     max_per_feed: int = 20,
     days_back: int = 7,
     sources_csv: Path | None = None,
 ) -> list[RawItem]:
-    """Fetch recent articles from all configured RSS sources.
+    """Fetch recent articles from all configured RSS sources in parallel.
 
-    Reads source URLs from config/rss_sources.csv and fetches each feed
-    independently. Errors on individual feeds are logged and skipped so
-    a single dead feed never aborts the full collection.
+    Reads source URLs from config/rss_sources.csv and fetches all feeds
+    concurrently via a ThreadPoolExecutor. Errors on individual feeds are
+    logged and skipped so a single dead feed never aborts the full collection.
+    Deduplication by SHA-256 URL hash is applied after all workers finish.
 
     Args:
         max_per_feed: Maximum articles to keep per source feed.
@@ -202,29 +237,17 @@ def scrape_rss_sources(
         logger.warning("No RSS sources configured — returning empty list.")
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    fetch = partial(_fetch_single_feed, days_back=days_back, max_per_feed=max_per_feed)
+
     all_items: list[RawItem] = []
     seen_ids: set[str] = set()
 
-    for source in sources:
-        name = source["name"]
-        feed_url = source["url"]
-        try:
-            resp = requests.get(feed_url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-        except requests.RequestException:
-            logger.warning("Failed to fetch RSS feed '%s' (%s)", name, feed_url[:60])
-            continue
-
-        items = _parse_feed(resp.text, name, cutoff)
-        added = 0
-        for item in items[:max_per_feed]:
-            if item["id"] not in seen_ids:
-                seen_ids.add(item["id"])
-                all_items.append(item)
-                added += 1
-
-        logger.info("  RSS %-30s → %d articles", name, added)
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        for batch in executor.map(fetch, sources):
+            for item in batch:
+                if item["id"] not in seen_ids:
+                    seen_ids.add(item["id"])
+                    all_items.append(item)
 
     logger.info("RSS scraper finished: %d articles from %d sources", len(all_items), len(sources))
     return all_items

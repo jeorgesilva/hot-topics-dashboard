@@ -28,3 +28,19 @@ Telepolis,https://www.heise.de/tp/news-atom.xml,45,LEFT,de
 Nachdenkseiten,https://www.nachdenkseiten.de/?feed=rss2,22,LEFT,de
 Rubikon,https://www.rubikon.news/feed,12,CONSPIRACY,de
 KenFM / AUF1 Blog,https://kenfm.de/feed/,8,CONSPIRACY,de
+NDR,https://www.ndr.de/nachrichten/index~rss2.xml,89,CENTER,de
+WDR,https://www1.wdr.de/nachrichten/nachrichten-rss.xml,88,CENTER,de
+SWR,https://www.swr.de/home/nachrichten-swr/nachrichten-swr-100~rss.xml,88,CENTER,de
+RBB24,https://www.rbb24.de/nachrichten/rss.xml,87,CENTER,de
+ORF,https://rss.orf.at/news.xml,85,CENTER,de-AT
+derStandard,https://www.derstandard.at/rss/Frontpage,80,LEFT-CENTER,de-AT
+NZZ,https://www.nzz.ch/recent.rss,87,RIGHT-CENTER,de-CH
+SRF News,https://www.srf.ch/news/bnf/rss/1646,87,CENTER,de-CH
+Heise Online,https://www.heise.de/rss/heise-top-atom.xml,75,CENTER,de
+Golem.de,https://www.golem.de/rss.php?tp=atom1.0,72,CENTER,de
+Spektrum der Wissenschaft,https://www.spektrum.de/rss/news/,76,CENTER,de
+Wirtschaftswoche,https://www.wiwo.de/contentexport/feed/schlagzeilen,75,RIGHT-CENTER,de
+Capital,https://www.capital.de/feed/,70,RIGHT-CENTER,de
+Frankfurter Rundschau,https://www.fr.de/rssfeed.rdf,73,LEFT-CENTER,de
+Journalistenwatch,https://www.journalistenwatch.com/feed/,12,FAR-RIGHT,de
+Multipolar,https://multipolar-magazin.de/feed,15,CONSPIRACY,de
