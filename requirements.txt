@@ -2,15 +2,14 @@
 python-dotenv>=1.0.0
 
 # Scraping
-praw>=7.7.0
 google-api-python-client>=2.100.0
-crawl4ai>=0.3.0
-playwright>=1.40.0
 trafilatura>=1.12.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 
 # NLP
 spacy>=3.7.0
-https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.7.0/de_core_news_sm-3.7.0-py3-none-any.whl
+https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.7.0/de_core_news_lg-3.7.0-py3-none-any.whl
 transformers>=4.36.0
 torch>=2.1.0
 sentence-transformers>=2.2.0
@@ -27,8 +26,11 @@ streamlit>=1.29.0
 plotly>=5.18.0
 
 # Utilities
+numpy>=1.26.0
 pandas>=2.1.0
 requests>=2.31.0
+python-whois>=0.9.0
+dnspython>=2.4.0
 
 # Testing
 pytest>=7.4.0

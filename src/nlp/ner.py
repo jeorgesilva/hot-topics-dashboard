@@ -9,7 +9,8 @@ from src.nlp.preprocessor import CleanedItem
 
 _nlp: spacy.language.Language | None = None
 
-ENTITY_LABELS = {"PERSON", "ORG", "GPE", "LOC", "EVENT", "NORP"}
+# de_core_news_lg label set: PER, ORG, LOC, MISC
+ENTITY_LABELS = {"PER", "ORG", "LOC", "MISC"}
 
 
 class EntityTags(TypedDict):
@@ -26,7 +27,7 @@ class AnnotatedItem(CleanedItem):
 def _get_nlp() -> spacy.language.Language:
     global _nlp
     if _nlp is None:
-        _nlp = spacy.load("en_core_web_sm")
+        _nlp = spacy.load("de_core_news_lg")
     return _nlp
 
 
@@ -47,13 +48,13 @@ def extract_entities(text: str) -> EntityTags:
             continue
         seen.add(key)
 
-        if ent.label_ == "PERSON":
+        if ent.label_ == "PER":
             tags["persons"].append(value)
-        elif ent.label_ in {"ORG", "NORP"}:
+        elif ent.label_ == "ORG":
             tags["organizations"].append(value)
-        elif ent.label_ in {"GPE", "LOC"}:
+        elif ent.label_ == "LOC":
             tags["locations"].append(value)
-        elif ent.label_ == "EVENT":
+        elif ent.label_ == "MISC":
             tags["events"].append(value)
 
     return tags

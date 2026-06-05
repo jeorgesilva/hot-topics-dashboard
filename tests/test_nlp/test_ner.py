@@ -5,23 +5,23 @@ from src.nlp.preprocessor import preprocess
 
 class TestExtractEntities:
     def test_returns_entity_tags_structure(self):
-        tags = extract_entities("Barack Obama visited Washington D.C.")
+        tags = extract_entities("Angela Merkel besuchte Berlin.")
         assert "persons" in tags
         assert "organizations" in tags
         assert "locations" in tags
         assert "events" in tags
 
     def test_detects_person(self):
-        tags = extract_entities("Elon Musk announced a new product.")
-        assert any("Elon" in p or "Musk" in p for p in tags["persons"])
+        tags = extract_entities("Angela Merkel traf sich mit Olaf Scholz in Berlin.")
+        assert any("Merkel" in p or "Angela" in p for p in tags["persons"])
 
     def test_detects_location(self):
-        tags = extract_entities("The summit was held in Paris, France.")
+        tags = extract_entities("Der Gipfel fand in Berlin statt.")
         locations = [loc.lower() for loc in tags["locations"]]
-        assert "paris" in locations or "france" in locations
+        assert "berlin" in locations
 
     def test_no_duplicates(self):
-        tags = extract_entities("NASA NASA NASA launched a rocket.")
+        tags = extract_entities("Die Bundesregierung Bundesregierung startete eine Initiative.")
         for key in tags:
             assert len(tags[key]) == len(set(t.lower() for t in tags[key]))
 

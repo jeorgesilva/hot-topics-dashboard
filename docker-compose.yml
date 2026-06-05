@@ -1,0 +1,11 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: hot-topics-searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/searxng:/etc/searxng:rw
+    restart: unless-stopped
+    environment:
+      - SEARXNG_SECRET_KEY=hot-topics-local-dev

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,7 +41,32 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
+def run_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations. Safe to call multiple times.
+
+    Each ALTER TABLE is wrapped in try/except because SQLite raises
+    OperationalError when the column already exists — that is the expected
+    idempotent behaviour.
+
+    Args:
+        conn: Active database connection.
+    """
+    migrations = [
+        "ALTER TABLE raw_items    ADD COLUMN article_risk_score REAL",
+        "ALTER TABLE topic_scores ADD COLUMN avg_article_risk   REAL",
+        "ALTER TABLE topics       ADD COLUMN run_id INTEGER",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists — ok
+    conn.commit()
+
+
+def init_db(
+    db_path: "Path | str | sqlite3.Connection | None" = None,
+) -> sqlite3.Connection:
     """Create the database tables if they don't exist.
 
     Creates `raw_items` plus clustering tables (`topics`, `topic_sources`).
@@ -48,17 +74,21 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     before the NLP pipeline runs.
 
     Args:
-        db_path: Path to the .db file.
+        db_path: Path to the .db file, or an existing Connection (for tests).
 
     Returns:
         sqlite3.Connection ready for use.
     """
-    conn = get_connection(db_path)
+    if isinstance(db_path, sqlite3.Connection):
+        conn = db_path
+    else:
+        conn = get_connection(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS raw_items (
             id              TEXT PRIMARY KEY,
             title           TEXT NOT NULL,
             description     TEXT,
+            body_text       TEXT,
             source          TEXT NOT NULL,
             url             TEXT NOT NULL,
             platform        TEXT NOT NULL,
@@ -85,11 +115,20 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         ON raw_items(cluster_id)
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at   TEXT NOT NULL,
+            completed_at TEXT,
+            status       TEXT NOT NULL DEFAULT 'running'
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS topics (
-            id          INTEGER PRIMARY KEY,
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
             label       TEXT NOT NULL,
             created_at  TEXT NOT NULL,
-            item_count  INTEGER NOT NULL DEFAULT 0
+            item_count  INTEGER NOT NULL DEFAULT 0,
+            run_id      INTEGER REFERENCES pipeline_runs(id)
         )
     """)
     conn.execute("""
@@ -124,7 +163,27 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
             narrative_divergence           REAL
         )
     """)
+    # Dynamic trust resolver cache — keyed by domain, populated on first lookup.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS domain_trust_cache (
+            domain      TEXT PRIMARY KEY,
+            trust_score REAL NOT NULL,
+            method      TEXT NOT NULL,
+            cached_at   TEXT NOT NULL
+        )
+    """)
+
+    # Session-5 and later migrations (idempotent).
+    run_schema_migrations(conn)
+
     # Idempotent migration: add columns introduced after initial schema deploy.
+    raw_existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(raw_items)").fetchall()
+    }
+    if "body_text" not in raw_existing:
+        conn.execute("ALTER TABLE raw_items ADD COLUMN body_text TEXT")
+
     existing = {
         row[1]
         for row in conn.execute("PRAGMA table_info(topic_scores)").fetchall()
@@ -168,15 +227,16 @@ def insert_items(
     conn.executemany(
         """
         INSERT OR IGNORE INTO raw_items
-            (id, title, description, source, url, platform, timestamp, engagement_json)
+            (id, title, description, body_text, source, url, platform, timestamp, engagement_json)
         VALUES
-            (:id, :title, :description, :source, :url, :platform, :timestamp, :engagement_json)
+            (:id, :title, :description, :body_text, :source, :url, :platform, :timestamp, :engagement_json)
         """,
         [
             {
                 "id": item["id"],
                 "title": item["title"],
                 "description": item.get("description"),
+                "body_text": item.get("body_text"),  # type: ignore[typeddict-item]
                 "source": item["source"],
                 "url": item["url"],
                 "platform": item["platform"],
@@ -241,6 +301,39 @@ def get_items(
             d[clean_key] = json.loads(raw) if raw else None
         results.append(d)
     return results
+
+
+def start_run(conn: sqlite3.Connection) -> int:
+    """Insert a pipeline_runs row with status 'running' and return its id.
+
+    Args:
+        conn: Active database connection.
+
+    Returns:
+        The new run_id (INTEGER PRIMARY KEY).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        "INSERT INTO pipeline_runs (started_at, status) VALUES (?, 'running')",
+        (now,),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def complete_run(conn: sqlite3.Connection, run_id: int) -> None:
+    """Mark a pipeline run as completed and record the finish time.
+
+    Args:
+        conn: Active database connection.
+        run_id: ID previously returned by start_run.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE pipeline_runs SET completed_at = ?, status = 'completed' WHERE id = ?",
+        (now, run_id),
+    )
+    conn.commit()
 
 
 def _count_rows(conn: sqlite3.Connection) -> int:

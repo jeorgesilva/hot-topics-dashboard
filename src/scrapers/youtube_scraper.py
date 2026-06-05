@@ -24,10 +24,12 @@ from src.utils.models import RawItem
 
 load_dotenv()
 
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-
-if not YOUTUBE_API_KEY:
-    raise ValueError("YOUTUBE_API_KEY not found in .env file")
+# YouTube scraper disabled — re-enable when YOUTUBE_API_KEY is available
+# YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+#
+# if not YOUTUBE_API_KEY:
+#     raise ValueError("YOUTUBE_API_KEY not found in .env file")
+YOUTUBE_API_KEY: str | None = None
 
 logger = logging.getLogger(__name__)
 

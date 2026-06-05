@@ -75,22 +75,25 @@ def get_trust_score(
     domain: str,
     neutral: float | None = None,
     topic_is_breaking: bool = False,
+    conn: sqlite3.Connection | None = None,
 ) -> float:
     """Return the trust score (0–100) for a domain.
 
-    Strips 'www.' prefix before lookup. For unknown domains the returned score
-    depends on context: a domain not in the trust DB is penalised below 50
-    because novel or obscure domains are more likely to be shell/spam sites
-    than genuinely neutral outlets. The penalty is steeper for breaking stories
-    where coordinated misinformation spikes.
+    Strips 'www.' prefix before lookup. Resolution order for unknown domains:
+      1. Static CSV (_TRUST_DB) — always checked first.
+      2. Explicit neutral override — for backward-compatible callers.
+      3. Dynamic resolver (domain_resolver.resolve_trust) — when conn provided.
+      4. Flat default (_UNKNOWN_SCORE / _UNKNOWN_BREAKING_SCORE).
 
     Args:
         domain: Bare domain name, e.g. 'bbc.com' or 'www.reuters.com'.
-        neutral: Explicit override score for unknown domains. When provided,
-            bypasses the contextual defaults (for backwards-compatible call
-            sites and compute_coverage_metrics which manages its own neutral).
-        topic_is_breaking: If True, unknown domains receive
+        neutral: Explicit override for unknown domains. Skips the dynamic
+            resolver when set; kept for backward-compatible call sites.
+        topic_is_breaking: If True, the flat fallback uses
             _UNKNOWN_BREAKING_SCORE instead of _UNKNOWN_SCORE.
+        conn: Active SQLite connection. When provided, unknown domains are
+            resolved via TLD heuristics and the result cached in
+            domain_trust_cache. Ignored when neutral is also set.
 
     Returns:
         Trust score in [0, 100].
@@ -100,6 +103,9 @@ def get_trust_score(
         return _TRUST_DB[key]
     if neutral is not None:
         return neutral
+    if conn is not None:
+        from src.scoring.domain_resolver import resolve_trust
+        return resolve_trust(key, conn)
     return _UNKNOWN_BREAKING_SCORE if topic_is_breaking else _UNKNOWN_SCORE
 
 
@@ -188,7 +194,10 @@ def compute_coverage_metrics(
 
     for row in rows:
         domain = _domain_from_url(row["url"]) or row["source"]
-        score = get_trust_score(domain, neutral=neutral)
+        # Pass conn so unknown domains use TLD heuristics via domain_resolver.
+        # neutral is omitted here intentionally — it would short-circuit the
+        # resolver for every unknown domain.
+        score = get_trust_score(domain, conn=conn)
         scores.append(score)
         all_domains.add(domain)
         if score >= high_trust_threshold:
@@ -220,7 +229,14 @@ def score_coverage(conn: sqlite3.Connection) -> int:
     Returns:
         Number of topics processed.
     """
-    topic_ids = [r["id"] for r in conn.execute("SELECT id FROM topics").fetchall()]
+    topic_ids = [
+        r["id"] for r in conn.execute(
+            """
+            SELECT id FROM topics
+            WHERE COALESCE(run_id, -1) = COALESCE((SELECT MAX(run_id) FROM topics), -1)
+            """
+        ).fetchall()
+    ]
 
     for topic_id in topic_ids:
         verified = compute_coverage_metrics(

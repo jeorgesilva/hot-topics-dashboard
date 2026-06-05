@@ -3,7 +3,48 @@ from __future__ import annotations
 
 import pytest
 
-from src.scoring.attribution import score_attribution_vagueness
+from src.scoring.attribution import _named_source_discount, score_attribution_vagueness
+
+
+# ---------------------------------------------------------------------------
+# Minimal spaCy-like mock objects for NER-enhanced tests
+# ---------------------------------------------------------------------------
+
+class _Ent:
+    def __init__(self, label: str):
+        self.label_ = label
+
+class _Token:
+    def __init__(self, lemma: str, pos: str = "VERB"):
+        self.lemma_ = lemma
+        self.pos_ = pos
+
+class _Sent:
+    def __init__(self, tokens: list[_Token], ents: list[_Ent]):
+        self._tokens = tokens
+        self.ents = ents
+
+    def __iter__(self):
+        return iter(self._tokens)
+
+class _Doc:
+    def __init__(self, sents: list[_Sent]):
+        self._sents = sents
+
+    @property
+    def sents(self):
+        return iter(self._sents)
+
+    def has_annotation(self, attr: str) -> bool:
+        return True  # mock always provides sentence boundaries via _sents
+
+class _NLP:
+    """Fake spaCy Language: always returns the same pre-built doc."""
+    def __init__(self, doc: _Doc):
+        self._doc = doc
+
+    def __call__(self, text: str) -> _Doc:
+        return self._doc
 
 
 # ---------------------------------------------------------------------------
@@ -215,3 +256,93 @@ class TestSaturation:
         lower = score_attribution_vagueness("experts say this is dangerous.")
         upper = score_attribution_vagueness("EXPERTS SAY THIS IS DANGEROUS.")
         assert lower == upper
+
+
+# ---------------------------------------------------------------------------
+# _named_source_discount unit tests
+# ---------------------------------------------------------------------------
+
+class TestNamedSourceDiscount:
+    def test_per_entity_with_attribution_verb_gives_discount(self):
+        sent = _Sent([_Token("say")], [_Ent("PER")])
+        assert _named_source_discount(_Doc([sent])) == 0.20
+
+    def test_org_entity_also_gives_discount(self):
+        sent = _Sent([_Token("report")], [_Ent("ORG")])
+        assert _named_source_discount(_Doc([sent])) == 0.20
+
+    def test_two_anchored_sentences_sum_discounts(self):
+        sent = _Sent([_Token("say")], [_Ent("PER")])
+        assert _named_source_discount(_Doc([sent, sent])) == 0.40
+
+    def test_discount_capped_at_max(self):
+        sent = _Sent([_Token("say")], [_Ent("PER")])
+        # three anchored sentences → would be 0.60 without cap
+        assert _named_source_discount(_Doc([sent, sent, sent])) == 0.40
+
+    def test_no_named_entity_no_discount(self):
+        sent = _Sent([_Token("say")], [])
+        assert _named_source_discount(_Doc([sent])) == 0.0
+
+    def test_named_entity_but_no_attribution_verb_no_discount(self):
+        # PER entity present but the verb is not an attribution verb
+        sent = _Sent([_Token("run", pos="VERB")], [_Ent("PER")])
+        assert _named_source_discount(_Doc([sent])) == 0.0
+
+    def test_non_verb_token_ignored(self):
+        # "say" tagged as NOUN should not match
+        sent = _Sent([_Token("say", pos="NOUN")], [_Ent("PER")])
+        assert _named_source_discount(_Doc([sent])) == 0.0
+
+    def test_empty_doc_returns_zero(self):
+        assert _named_source_discount(_Doc([])) == 0.0
+
+    def test_loc_entity_gives_no_discount(self):
+        # Only PER and ORG are source-anchor signals, not LOC
+        sent = _Sent([_Token("say")], [_Ent("LOC")])
+        assert _named_source_discount(_Doc([sent])) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# score_attribution_vagueness — NER-enhanced path
+# ---------------------------------------------------------------------------
+
+class TestNEREnhancedPath:
+    def test_named_source_reduces_score(self):
+        text = "Experten sagen, die Lage sei kritisch."
+        pure = score_attribution_vagueness(text)
+        assert pure > 0.0
+
+        nlp = _NLP(_Doc([_Sent([_Token("sagen")], [_Ent("ORG")])]))
+        with_ner = score_attribution_vagueness(text, nlp=nlp)
+        assert with_ner < pure
+
+    def test_no_named_source_score_unchanged(self):
+        text = "Officials warn of an imminent threat."
+        pure = score_attribution_vagueness(text)
+
+        nlp = _NLP(_Doc([_Sent([_Token("warn")], [])]))
+        with_ner = score_attribution_vagueness(text, nlp=nlp)
+        assert with_ner == pure
+
+    def test_zero_raw_score_skips_nlp(self):
+        # Text with no vague patterns: nlp should not be called
+        text = "Der WHO-Sprecher bestätigte die Ergebnisse."
+        assert score_attribution_vagueness(text) == 0.0
+
+        class _FailNLP:
+            def __call__(self, text):
+                raise AssertionError("nlp() must not be called when raw_score is 0")
+
+        assert score_attribution_vagueness(text, nlp=_FailNLP()) == 0.0
+
+    def test_score_never_goes_below_zero(self):
+        text = "Experts say this is dangerous."
+        sent = _Sent([_Token("say")], [_Ent("PER")])
+        nlp = _NLP(_Doc([sent, sent, sent]))  # max discount applied
+        score = score_attribution_vagueness(text, nlp=nlp)
+        assert score >= 0.0
+
+    def test_backward_compat_no_nlp_arg(self):
+        text = "Experts say this is dangerous."
+        assert score_attribution_vagueness(text) == score_attribution_vagueness(text, nlp=None)
