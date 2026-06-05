@@ -29,6 +29,7 @@ from src.scoring.article_scorer import score_article
 from src.scoring.attribution import score_attribution_vagueness
 from src.scoring.compute_scores import _MISINFO_THRESHOLD, _WEIGHTS
 from src.scoring.sentiment import _clickbait_score, _sensationalism
+from src.scoring.source_lookup import domain_in_static_csv, generate_disclaimer, get_source_data
 from src.scoring.source_trust import _domain_from_url, get_trust_score
 from src.utils.db import init_db
 
@@ -290,13 +291,13 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
         if latest_run and latest_run.get("completed_at"):
             run_ts = str(latest_run["completed_at"])[:19].replace("T", " ")
             run_id = latest_run["id"]
-            st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Lauf #{run_id} · aktualisiert {run_ts} UTC")
+            st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Run #{run_id} · updated {run_ts} UTC")
         else:
             st.caption(i18n.APP_CAPTION)
     with col_settings:
         with st.expander("⚙️"):
-            new_path = st.text_input("Datenbank", value=db_path, label_visibility="collapsed")
-            if st.button("🔄 Aktualisieren", use_container_width=True):
+            new_path = st.text_input("Database", value=db_path, label_visibility="collapsed")
+            if st.button("🔄 Refresh", use_container_width=True):
                 st.cache_data.clear()
                 st.session_state["db_path"] = new_path
                 st.rerun()
@@ -315,7 +316,7 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
             for _, r in flagged.iterrows()
         )
         st.error(
-            f"**{len(flagged)} Hochrisiko-Thema(en) erkannt** (Risiko ≥ {_HIGH_RISK}):\n\n{lines}",
+            f"**{len(flagged)} high-risk topic(s) detected** (risk ≥ {_HIGH_RISK}):\n\n{lines}",
             icon="🚨",
         )
 
@@ -329,8 +330,8 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
         i18n.METRIC_HIGH_RISK,
         int(len(flagged)),
         help=(
-            f"Themen deren Gesamtrisiko {_HIGH_RISK} (50 %) überschreitet. "
-            "Basiert auf Quellen-Vertrauen, Sentiment, Framing-Divergenz und Sensationalismus."
+            f"Topics whose composite risk exceeds {_HIGH_RISK} (50 %). "
+            "Based on source trust, sentiment, framing divergence and sensationalism."
         ),
     )
     c3.metric(
@@ -403,7 +404,7 @@ def _render_topic_card(row: pd.Series) -> None:
     with col_card:
         st.markdown(card_html, unsafe_allow_html=True)
     with col_nav:
-        if st.button("→", key=f"nav_t_{topic_id}", help="Thema öffnen"):
+        if st.button("→", key=f"nav_t_{topic_id}", help="Open topic"):
             st.query_params["view"] = "topic"
             st.query_params["topic_id"] = str(topic_id)
             st.rerun()
@@ -447,7 +448,7 @@ def _render_risk_bar(df: pd.DataFrame) -> None:
         marker_color=[_reliability_colour(p) for p in rel_pcts],
         text=[f"{p:.0f} %" for p in rel_pcts],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Risiko: %{x:.4f}<br>Zuverlässigkeit: %{text}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>Risk: %{x:.4f}<br>Reliability: %{text}<extra></extra>",
     ))
     fig.add_vline(
         x=_HIGH_RISK, line_dash="dash", line_color="#e74c3c",
@@ -529,7 +530,7 @@ def render_topic(topic_id: int, db_path: str) -> None:
         st.info(i18n.ARTICLES_NONE)
     else:
         for a in articles_data:
-            _render_article_row(a, topic_id)
+            _render_article_row(a, topic_id, db_path)
 
 
 def _render_score_breakdown(row: pd.Series) -> None:
@@ -553,7 +554,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
             i18n.SIGNAL_NAMES["Article Risk"],
             _WEIGHTS["avg_article_risk"] * avg_article_risk,
             _WEIGHTS["avg_article_risk"],
-            f"Ø Artikel-Risiko {avg_article_risk * 100:.1f} %",
+            f"Avg article risk {avg_article_risk * 100:.1f} %",
             i18n.SIGNAL_TOOLTIPS["Article Risk"],
         ),
         (
@@ -567,7 +568,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
             i18n.SIGNAL_NAMES["Low Coverage"],
             _WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),
             _WEIGHTS["coverage_ratio"],
-            f"{coverage_ratio * 100:.1f} % glaubwürdige Domains",
+            f"{coverage_ratio * 100:.1f} % credible domains",
             i18n.SIGNAL_TOOLTIPS["Low Coverage"],
         ),
         (
@@ -590,7 +591,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
               <div style='font-size:1.6em;font-weight:bold;color:{c}'>{contribution * 100:.1f}%</div>
               <div style='font-size:0.75em;color:#888'>{detail}</div>
               <div style='font-size:0.68em;color:#aaa;margin-top:4px'>
-                Gewicht {weight * 100:.0f} % · {share_pct:.0f} % des Gesamtrisikos
+                Weight {weight * 100:.0f} % · {share_pct:.0f} % of composite risk
               </div>
             </div>""",
             unsafe_allow_html=True,
@@ -598,7 +599,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
 
     with st.expander(i18n.EXPANDER_ARTICLE_RISK_DETAIL):
         sub_signals = [
-            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Ø Vertrauen {avg_trust:.1f}"),
+            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Avg trust {avg_trust:.1f}"),
             (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.25, f"{sentiment * 100:.1f} %"),
             (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.25, f"{sensationalism * 100:.1f} %"),
             (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.20, f"{attribution * 100:.1f} %"),
@@ -612,7 +613,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
                   <div style='font-size:0.75em;color:#666;margin-bottom:4px'>{label}</div>
                   <div style='font-size:1.2em;font-weight:bold;color:{c}'>{raw_val * 100:.1f}%</div>
                   <div style='font-size:0.7em;color:#888'>{detail}</div>
-                  <div style='font-size:0.65em;color:#aaa;margin-top:2px'>Gewicht im Artikel-Risiko: {weight * 100:.0f} %</div>
+                  <div style='font-size:0.65em;color:#aaa;margin-top:2px'>Weight in article risk: {weight * 100:.0f} %</div>
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -646,13 +647,13 @@ def _render_risk_waterfall(row: pd.Series) -> None:
         fig.add_trace(go.Bar(
             name=name,
             x=[val],
-            y=["Gesamtrisiko"],
+            y=["Composite Risk"],
             orientation="h",
             marker_color=colour,
             text=f"{val * 100:.1f} %" if val > 0.005 else "",
             textposition="inside",
             insidetextanchor="middle",
-            hovertemplate=f"<b>{name}</b><br>Beitrag: {val * 100:.2f} %<extra></extra>",
+            hovertemplate=f"<b>{name}</b><br>Contribution: {val * 100:.2f} %<extra></extra>",
         ))
 
     fig.add_vline(
@@ -660,7 +661,7 @@ def _render_risk_waterfall(row: pd.Series) -> None:
         line_dash="dot",
         line_color="rgba(255,255,255,0.6)",
         line_width=1.5,
-        annotation_text=f"Gesamt: {risk * 100:.1f} %",
+        annotation_text=f"Total: {risk * 100:.1f} %",
         annotation_position="top right",
         annotation_font_color="#fff",
     )
@@ -762,7 +763,7 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
     ))
     fig.update_layout(
         title=dict(text=i18n.SECTION_DOMAIN_TRUST, x=0.5),
-        xaxis=dict(title="Vertrauenswert (0–100)", range=[0, 100]),
+        xaxis=dict(title="Trust Score (0–100)", range=[0, 100]),
         yaxis=dict(tickfont=dict(size=10)),
         margin=dict(l=0, r=10, t=50, b=20),
         height=300,
@@ -774,10 +775,32 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
         st.markdown(i18n.EXPANDER_DOMAIN_TRUST_TEXT)
 
 
-def _render_article_row(article: dict, topic_id: int) -> None:
+def _render_article_disclaimer(domain: str, db_path: str) -> None:
+    """Render a muted source-evaluation caption below an article card.
+
+    Shows nothing for unknown domains where MBFC lookup failed.
+    Shows 'Source data unavailable' for known CSV outlets where lookup failed.
+    Shows the full disclaimer otherwise.
+    """
+    if not domain:
+        return
+    try:
+        data = get_source_data(domain, db_path=db_path)
+    except Exception:
+        return
+    if data.source == "unavailable" and data.confidence == "unavailable":
+        if domain_in_static_csv(domain):
+            st.caption("ℹ️ Source data unavailable")
+        return
+    disclaimer = generate_disclaimer(data)
+    if disclaimer:
+        st.caption(f"ℹ️ {disclaimer}")
+
+
+def _render_article_row(article: dict, topic_id: int, db_path: str = str(_DEFAULT_DB)) -> None:
     platform = article.get("platform", "")
     icon = PLATFORM_ICONS.get(platform, "🔗")
-    title = article.get("title", "Unbekannt")
+    title = article.get("title", "Unknown")
     source = article.get("source", "")
     url = article.get("url", "#")
     trust = float(article.get("trust_score", 50))
@@ -796,13 +819,17 @@ def _render_article_row(article: dict, topic_id: int) -> None:
             f"**[{_truncate(title, 85)}]({url})**  \n"
             f"<span style='font-size:0.85em;color:#666'>"
             f"{source}"
-            f" &nbsp;·&nbsp; <span style='color:{trust_colour}'>Vertrauen {trust:.0f}</span>"
-            f" &nbsp;·&nbsp; Sensationalismus {sens:.2f}"
+            f" &nbsp;·&nbsp; <span style='color:{trust_colour}'>Trust {trust:.0f}</span>"
+            f" &nbsp;·&nbsp; Sensationalism {sens:.2f}"
             f"</span>",
             unsafe_allow_html=True,
         )
+        _render_article_disclaimer(
+            _domain_from_url(article.get("url", "")) or article.get("source", ""),
+            db_path,
+        )
     with col_nav:
-        if item_id and st.button("→", key=f"nav_a_{item_id}", help="Artikel analysieren"):
+        if item_id and st.button("→", key=f"nav_a_{item_id}", help="Analyse article"):
             st.query_params["view"] = "article"
             st.query_params["item_id"] = item_id
             st.query_params["topic_id"] = str(topic_id)
@@ -815,11 +842,11 @@ def render_article(item_id: str, db_path: str) -> None:
     article = load_article(db_path, item_id)
 
     topic_id = article.get("topic_id") if article else st.query_params.get("topic_id")
-    topic_label = article.get("topic_label", "Thema") if article else "Thema"
+    topic_label = article.get("topic_label", "Topic") if article else "Topic"
 
     col_home, col_s1, col_topic, col_s2, col_art = st.columns([2, 0.4, 4, 0.4, 5])
     with col_home:
-        if st.button("🏠 Startseite", key="bc_home"):
+        if st.button("🏠 Home", key="bc_home"):
             st.query_params.clear()
             st.rerun()
     with col_s1:
@@ -840,12 +867,12 @@ def render_article(item_id: str, db_path: str) -> None:
     st.markdown("---")
 
     if article is None:
-        st.error(f"Artikel `{item_id}` nicht in der Datenbank gefunden.")
+        st.error(f"Article `{item_id}` not found in the database.")
         return
 
     platform = article.get("platform", "")
     icon = PLATFORM_ICONS.get(platform, "🔗")
-    title = article.get("title", "Unbekannt")
+    title = article.get("title", "Unknown")
     source = article.get("source", "")
     url = article.get("url", "#")
     timestamp = str(article.get("timestamp", ""))[:10]
@@ -853,18 +880,28 @@ def render_article(item_id: str, db_path: str) -> None:
     body_text = article.get("body_text") or ""
     cleaned_text = article.get("cleaned_text") or article.get("title", "")
 
-    st.markdown(f"## {icon} [{title}]({url})")
+    st.markdown(f"### {icon} [{title}]({url})")
     st.caption(f"**{source}** &nbsp;·&nbsp; {timestamp} &nbsp;·&nbsp; {platform}")
+    _render_article_disclaimer(
+        _domain_from_url(url) or source,
+        db_path,
+    )
+
+    def _plain_text(text: str) -> None:
+        st.markdown(
+            f"<div style='font-size:0.9em;line-height:1.6;white-space:pre-wrap'>{text}</div>",
+            unsafe_allow_html=True,
+        )
 
     if body_text:
         with st.expander(i18n.ARTICLE_FULL_TEXT, expanded=True):
-            st.write(body_text)
+            _plain_text(body_text)
         if description:
             with st.expander(i18n.ARTICLE_SUMMARY, expanded=False):
-                st.write(description)
+                _plain_text(description)
     else:
         with st.expander(i18n.ARTICLE_DESCRIPTION, expanded=True):
-            st.write(description or cleaned_text or i18n.ARTICLE_NO_TEXT)
+            _plain_text(description or cleaned_text or i18n.ARTICLE_NO_TEXT)
 
     st.markdown("---")
     st.subheader(i18n.SECTION_SIGNAL_ANALYSIS)
