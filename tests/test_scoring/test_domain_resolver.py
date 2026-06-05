@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
 from src.scoring.domain_resolver import (
-    _DEFAULT_TLD_SCORE,
-    _tld_score,
+    _SAFE_BROWSING_SCORE,
+    _SCORE_CEIL,
+    _SCORE_FLOOR,
+    _compute_live_score,
     init_cache,
     resolve_trust,
 )
@@ -23,46 +27,14 @@ def mem_conn():
     conn.close()
 
 
-# ---------------------------------------------------------------------------
-# _tld_score
-# ---------------------------------------------------------------------------
-
-class TestTldScore:
-    def test_gov_returns_high_trust(self):
-        assert _tld_score("bundestag.gov") == 82.0
-
-    def test_edu_returns_high_trust(self):
-        assert _tld_score("uni-muenchen.edu") == 78.0
-
-    def test_mil_returns_high_trust(self):
-        assert _tld_score("example.mil") == 80.0
-
-    def test_de_above_default(self):
-        assert _tld_score("example.de") > _DEFAULT_TLD_SCORE
-
-    def test_at_above_default(self):
-        assert _tld_score("example.at") > _DEFAULT_TLD_SCORE
-
-    def test_ch_above_default(self):
-        assert _tld_score("example.ch") > _DEFAULT_TLD_SCORE
-
-    def test_com_below_de(self):
-        assert _tld_score("example.com") < _tld_score("example.de")
-
-    def test_xyz_low_trust(self):
-        assert _tld_score("spam.xyz") <= 35.0
-
-    def test_top_low_trust(self):
-        assert _tld_score("spam.top") <= 35.0
-
-    def test_unknown_tld_returns_default(self):
-        assert _tld_score("example.unknowntld") == _DEFAULT_TLD_SCORE
-
-    def test_no_dot_returns_default(self):
-        assert _tld_score("localhost") == _DEFAULT_TLD_SCORE
-
-    def test_case_insensitive_tld(self):
-        assert _tld_score("example.DE") == _tld_score("example.de")
+def _all_zero_signals():
+    """Patch context that silences all external calls and returns zero signals."""
+    return [
+        patch("src.scoring.domain_resolver._safe_browsing_flagged", return_value=False),
+        patch("src.scoring.domain_resolver._wikidata_signal", return_value=0.0),
+        patch("src.scoring.domain_resolver._age_signal", return_value=0.0),
+        patch("src.scoring.domain_resolver._dns_signal", return_value=0.0),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +47,7 @@ class TestInitCache:
         init_cache(conn)
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert "domain_trust_cache" in tables
         conn.close()
@@ -85,7 +55,7 @@ class TestInitCache:
     def test_idempotent(self):
         conn = sqlite3.connect(":memory:")
         init_cache(conn)
-        init_cache(conn)  # must not raise
+        init_cache(conn)
         conn.close()
 
     def test_table_has_expected_columns(self):
@@ -97,44 +67,168 @@ class TestInitCache:
 
 
 # ---------------------------------------------------------------------------
-# resolve_trust
+# _compute_live_score — unit tests with all externals mocked
+# ---------------------------------------------------------------------------
+
+class TestComputeLiveScore:
+    def test_safe_browsing_flagged_returns_floor(self):
+        with (
+            patch("src.scoring.domain_resolver._safe_browsing_flagged", return_value=True),
+            patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", "fake-key"),
+            patch("src.utils.config.OPEN_PAGE_RANK_KEY", None),
+        ):
+            score, method = _compute_live_score("malware.xyz")
+        assert score == _SAFE_BROWSING_SCORE
+        assert method == "safe_browsing_flagged"
+
+    def test_no_signals_returns_score_floor(self):
+        patches = _all_zero_signals()
+        with (
+            patches[0], patches[1], patches[2], patches[3],
+            patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", "fake-key"),
+            patch("src.utils.config.OPEN_PAGE_RANK_KEY", None),
+        ):
+            score, _ = _compute_live_score("unknown.de")
+        assert score == _SCORE_FLOOR
+
+    def test_all_signals_maxed_approaches_ceiling(self):
+        with (
+            patch("src.scoring.domain_resolver._safe_browsing_flagged", return_value=False),
+            patch("src.scoring.domain_resolver._wikidata_signal", return_value=1.0),
+            patch("src.scoring.domain_resolver._age_signal", return_value=1.0),
+            patch("src.scoring.domain_resolver._dns_signal", return_value=1.0),
+            patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", "fake-key"),
+            patch("src.utils.config.OPEN_PAGE_RANK_KEY", None),
+        ):
+            score, _ = _compute_live_score("news.de")
+        assert score == _SCORE_CEIL
+
+    def test_opr_signal_included_when_key_present(self):
+        with (
+            patch("src.scoring.domain_resolver._safe_browsing_flagged", return_value=False),
+            patch("src.scoring.domain_resolver._wikidata_signal", return_value=1.0),
+            patch("src.scoring.domain_resolver._age_signal", return_value=1.0),
+            patch("src.scoring.domain_resolver._dns_signal", return_value=1.0),
+            patch("src.scoring.domain_resolver._opr_signal", return_value=1.0),
+            patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", "fake-key"),
+            patch("src.utils.config.OPEN_PAGE_RANK_KEY", "opr-key"),
+        ):
+            score, method = _compute_live_score("news.de")
+        assert score == _SCORE_CEIL
+        assert "opr=" in method
+
+    def test_score_always_within_valid_range(self):
+        signal_combos = [
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (0.5, 0.5, 0.5),
+            (1.0, 1.0, 1.0),
+        ]
+        for wiki, age, dns in signal_combos:
+            with (
+                patch("src.scoring.domain_resolver._safe_browsing_flagged", return_value=False),
+                patch("src.scoring.domain_resolver._wikidata_signal", return_value=wiki),
+                patch("src.scoring.domain_resolver._age_signal", return_value=age),
+                patch("src.scoring.domain_resolver._dns_signal", return_value=dns),
+                patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", None),
+                patch("src.utils.config.OPEN_PAGE_RANK_KEY", None),
+            ):
+                score, _ = _compute_live_score("example.com")
+            assert _SCORE_FLOOR <= score <= _SCORE_CEIL, f"Out of range for signals {wiki, age, dns}: {score}"
+
+    def test_method_tag_contains_signal_names(self):
+        patches = _all_zero_signals()
+        with (
+            patches[0], patches[1], patches[2], patches[3],
+            patch("src.utils.config.GOOGLE_SAFE_BROWSING_KEY", None),
+            patch("src.utils.config.OPEN_PAGE_RANK_KEY", None),
+        ):
+            _, method = _compute_live_score("example.com")
+        assert method.startswith("live:")
+        assert "wikidata=" in method
+        assert "age=" in method
+        assert "dns=" in method
+
+
+# ---------------------------------------------------------------------------
+# resolve_trust — integration with cache
 # ---------------------------------------------------------------------------
 
 class TestResolveTrust:
-    def test_returns_tld_score_for_gov(self, mem_conn):
-        assert resolve_trust("bundestag.gov", mem_conn) == 82.0
+    def test_fresh_miss_calls_compute_and_caches(self, mem_conn):
+        with patch(
+            "src.scoring.domain_resolver._compute_live_score",
+            return_value=(65.0, "live:wikidata=1.00"),
+        ) as mock_compute:
+            score = resolve_trust("example.de", mem_conn)
 
-    def test_returns_tld_score_for_de(self, mem_conn):
-        assert resolve_trust("example.de", mem_conn) == 52.0
-
-    def test_result_is_persisted_in_cache(self, mem_conn):
-        resolve_trust("example.de", mem_conn)
+        assert score == 65.0
+        mock_compute.assert_called_once_with("example.de")
         row = mem_conn.execute(
             "SELECT trust_score, method FROM domain_trust_cache WHERE domain = 'example.de'"
         ).fetchone()
-        assert row is not None
-        assert row["trust_score"] == 52.0
-        assert row["method"] == "heuristic"
+        assert row["trust_score"] == 65.0
+        assert row["method"] == "live:wikidata=1.00"
 
-    def test_cache_hit_returns_stored_value(self, mem_conn):
+    def test_fresh_cache_hit_skips_compute(self, mem_conn):
+        now = datetime.now(timezone.utc).isoformat()
         mem_conn.execute(
             "INSERT INTO domain_trust_cache (domain, trust_score, method, cached_at)"
-            " VALUES ('overridden.org', 77.0, 'manual', '2026-01-01T00:00:00Z')"
+            " VALUES ('cached.de', 77.0, 'live:wikidata=1.00', ?)",
+            (now,),
         )
         mem_conn.commit()
-        assert resolve_trust("overridden.org", mem_conn) == 77.0
 
-    def test_score_within_valid_range(self, mem_conn):
-        for domain in ["a.com", "b.de", "c.xyz", "d.gov", "e.unknowntld"]:
-            score = resolve_trust(domain, mem_conn)
-            assert 0.0 <= score <= 100.0, f"score out of range for {domain}: {score}"
+        with patch(
+            "src.scoring.domain_resolver._compute_live_score"
+        ) as mock_compute:
+            score = resolve_trust("cached.de", mem_conn)
 
-    def test_second_call_uses_cache_not_recompute(self, mem_conn):
-        resolve_trust("cached.de", mem_conn)
-        # Overwrite cache with a custom value
+        assert score == 77.0
+        mock_compute.assert_not_called()
+
+    def test_expired_cache_triggers_recompute(self, mem_conn):
+        stale = (
+            datetime.now(timezone.utc) - timedelta(days=8)
+        ).isoformat()
         mem_conn.execute(
-            "UPDATE domain_trust_cache SET trust_score = 99.0 WHERE domain = 'cached.de'"
+            "INSERT INTO domain_trust_cache (domain, trust_score, method, cached_at)"
+            " VALUES ('stale.de', 42.0, 'live:old', ?)",
+            (stale,),
         )
         mem_conn.commit()
-        # Should return the cached 99.0, not recompute 52.0
-        assert resolve_trust("cached.de", mem_conn) == 99.0
+
+        with patch(
+            "src.scoring.domain_resolver._compute_live_score",
+            return_value=(60.0, "live:refreshed"),
+        ):
+            score = resolve_trust("stale.de", mem_conn)
+
+        assert score == 60.0
+        row = mem_conn.execute(
+            "SELECT trust_score FROM domain_trust_cache WHERE domain = 'stale.de'"
+        ).fetchone()
+        assert row["trust_score"] == 60.0
+
+    def test_score_in_valid_range(self, mem_conn):
+        with patch(
+            "src.scoring.domain_resolver._compute_live_score",
+            return_value=(_SCORE_FLOOR, "live:zeros"),
+        ):
+            score = resolve_trust("any.com", mem_conn)
+        assert 0.0 <= score <= 100.0
+
+    def test_safe_browsing_score_persisted(self, mem_conn):
+        with patch(
+            "src.scoring.domain_resolver._compute_live_score",
+            return_value=(_SAFE_BROWSING_SCORE, "safe_browsing_flagged"),
+        ):
+            score = resolve_trust("malware.xyz", mem_conn)
+
+        assert score == _SAFE_BROWSING_SCORE
+        row = mem_conn.execute(
+            "SELECT method FROM domain_trust_cache WHERE domain = 'malware.xyz'"
+        ).fetchone()
+        assert row["method"] == "safe_browsing_flagged"

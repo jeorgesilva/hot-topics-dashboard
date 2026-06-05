@@ -25,8 +25,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.dashboard import i18n
+from src.scoring.article_scorer import score_article
 from src.scoring.attribution import score_attribution_vagueness
-from src.scoring.compute_scores import _MISINFO_THRESHOLD, _WEIGHTS, grade_topic
+from src.scoring.compute_scores import _MISINFO_THRESHOLD, _WEIGHTS
 from src.scoring.sentiment import _clickbait_score, _sensationalism
 from src.scoring.source_trust import _domain_from_url, get_trust_score
 from src.utils.db import init_db
@@ -36,13 +37,16 @@ _DEFAULT_DB = _PROJECT_ROOT / "data" / "dashboard.db"
 
 _HIGH_RISK = _MISINFO_THRESHOLD
 
-_GRADE_COLOUR: dict[str, str] = {
-    "A": "#2ecc71",
-    "B": "#82b74b",
-    "C": "#f1c40f",
-    "D": "#e67e22",
-    "F": "#e74c3c",
-}
+def _reliability_colour(reliability_pct: float) -> str:
+    if reliability_pct >= 80:
+        return "#2ecc71"
+    if reliability_pct >= 60:
+        return "#82b74b"
+    if reliability_pct >= 40:
+        return "#f1c40f"
+    if reliability_pct >= 20:
+        return "#e67e22"
+    return "#e74c3c"
 
 _RISK_COLORSCALE = [
     [0.0, "#2ecc71"],
@@ -65,16 +69,28 @@ PLATFORM_ICONS: dict[str, str] = {
 
 @st.cache_data(ttl=60)
 def load_scored_topics(db_path: str) -> pd.DataFrame:
-    """Load all topics with scores. Returns empty DataFrame if unavailable."""
+    """Load all topics with scores for the latest completed run.
+
+    Returns empty DataFrame if unavailable.
+    """
     try:
         conn = init_db(db_path)
+
+        latest_run = conn.execute(
+            "SELECT MAX(id) FROM pipeline_runs WHERE status = 'completed'"
+        ).fetchone()[0]
+
+        # Backward compat: if pipeline_runs is empty, show all topics.
+        run_filter = f"AND t.run_id = {latest_run}" if latest_run is not None else ""
+
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 t.id            AS topic_id,
                 t.label         AS topic,
                 t.item_count    AS articles,
                 t.created_at,
+                t.run_id,
                 ts.avg_sentiment_extremity  AS sentiment_extremity,
                 ts.sensationalism_avg       AS sensationalism,
                 ts.framing_inconsistency,
@@ -106,6 +122,7 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                    AND ri.keywords_json IS NOT NULL) AS keywords_raw
             FROM topics t
             LEFT JOIN topic_scores ts ON t.id = ts.topic_id
+            WHERE 1=1 {run_filter}
             ORDER BY ts.composite_risk DESC NULLS LAST, t.created_at DESC
             """
         ).fetchall()
@@ -118,11 +135,30 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
 
     df = pd.DataFrame([dict(r) for r in rows])
     scored = df["composite_risk"].notna()
-    df.loc[scored, "grade"] = df.loc[scored, "composite_risk"].apply(grade_topic)
     df.loc[scored, "reliability_pct"] = ((1.0 - df.loc[scored, "composite_risk"]) * 100).round(1)
     df["coverage_ratio_pct"] = (df["coverage_ratio"].fillna(0) * 100).round(1)
     df["bubble_size"] = df["coverage_breadth"].fillna(0).clip(lower=1)
     return df
+
+
+@st.cache_data(ttl=60)
+def load_latest_run(db_path: str) -> dict | None:
+    """Return metadata for the latest completed pipeline run, or None."""
+    try:
+        conn = init_db(db_path)
+        row = conn.execute(
+            """
+            SELECT id, started_at, completed_at
+            FROM pipeline_runs
+            WHERE status = 'completed'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=60)
@@ -142,22 +178,24 @@ def load_topic_articles(db_path: str, topic_id: int) -> list[dict]:
             """,
             (topic_id,),
         ).fetchall()
-        conn.close()
     except Exception:
         return []
 
     result = []
-    for row in rows:
-        d = dict(row)
-        try:
-            d["engagement"] = json.loads(d.pop("engagement_json", "{}") or "{}")
-        except Exception:
-            d["engagement"] = {}
-        domain = _domain_from_url(d.get("url", "")) or d.get("source", "")
-        d["trust_score"] = get_trust_score(domain)
-        text = d.get("cleaned_text") or d.get("title", "")
-        d["sensationalism_score"] = _sensationalism(text)
-        result.append(d)
+    try:
+        for row in rows:
+            d = dict(row)
+            try:
+                d["engagement"] = json.loads(d.pop("engagement_json", "{}") or "{}")
+            except Exception:
+                d["engagement"] = {}
+            domain = _domain_from_url(d.get("url", "")) or d.get("source", "")
+            d["trust_score"] = get_trust_score(domain, conn=conn)
+            text = d.get("cleaned_text") or d.get("title", "")
+            d["sensationalism_score"] = _sensationalism(text)
+            result.append(d)
+    finally:
+        conn.close()
     return result
 
 
@@ -226,11 +264,11 @@ def _platform_icons(platforms_str: str | None) -> str:
     return " ".join(PLATFORM_ICONS.get(p, "🔗") for p in parts if p)
 
 
-def _grade_badge_html(grade: str) -> str:
-    colour = _GRADE_COLOUR.get(grade, "#999")
+def _pct_badge_html(reliability_pct: float) -> str:
+    colour = _reliability_colour(reliability_pct)
     return (
         f"<span style='background:{colour};color:#fff;padding:3px 10px;"
-        f"border-radius:4px;font-weight:bold;font-size:1.0em'>{grade}</span>"
+        f"border-radius:4px;font-weight:bold;font-size:1.0em'>{reliability_pct:.0f} %</span>"
     )
 
 
@@ -248,7 +286,13 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
     col_title, col_settings = st.columns([6, 1])
     with col_title:
         st.title(i18n.APP_TITLE)
-        st.caption(i18n.APP_CAPTION)
+        latest_run = load_latest_run(db_path)
+        if latest_run and latest_run.get("completed_at"):
+            run_ts = str(latest_run["completed_at"])[:19].replace("T", " ")
+            run_id = latest_run["id"]
+            st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Lauf #{run_id} · aktualisiert {run_ts} UTC")
+        else:
+            st.caption(i18n.APP_CAPTION)
     with col_settings:
         with st.expander("⚙️"):
             new_path = st.text_input("Datenbank", value=db_path, label_visibility="collapsed")
@@ -266,7 +310,7 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
 
     if not flagged.empty:
         lines = "  \n".join(
-            f"- **{r['topic']}** &nbsp; {_grade_badge_html(str(r.get('grade', '?')))} "
+            f"- **{r['topic']}** &nbsp; {_pct_badge_html(float(r.get('reliability_pct', 50) or 50))} "
             f"Risiko {r['composite_risk']:.3f}"
             for _, r in flagged.iterrows()
         )
@@ -323,26 +367,12 @@ def _render_topic_card(row: pd.Series) -> None:
     articles = int(row.get("articles", 0) or 0)
     risk_raw = row.get("composite_risk")
     risk = None if pd.isna(risk_raw) else float(risk_raw)
-    grade_raw = row.get("grade")
-    grade = "?" if pd.isna(grade_raw) else str(grade_raw)
     rel_raw = row.get("reliability_pct")
     reliability_pct = 50.0 if pd.isna(rel_raw) else float(rel_raw)
     platforms_str = str(row.get("platforms", "") or "")
-    grade_colour = _GRADE_COLOUR.get(grade, "#999")
+    grade_colour = _reliability_colour(reliability_pct)
     icons = _platform_icons(platforms_str)
     risk_str = _risk_badge_html(risk) if risk is not None else f"<em style='color:#aaa'>{i18n.LABEL_UNSCORED}</em>"
-
-    div_raw = row.get("narrative_divergence")
-    div_val = None if pd.isna(div_raw) else float(div_raw)
-    div_badge = ""
-    if div_val is not None:
-        div_colour = "#e74c3c" if div_val >= 0.3 else "#e67e22" if div_val >= 0.15 else "#2ecc71"
-        div_badge = (
-            f"<span title='{i18n.LABEL_DIV_TOOLTIP}' "
-            f"style='background:{div_colour};color:#fff;padding:2px 7px;"
-            f"border-radius:4px;font-size:0.78em;margin-left:6px;cursor:help'>"
-            f"Δ {div_val:.2f}</span>"
-        )
 
     keywords = _parse_keywords(row.get("keywords_raw"))
     kw_section = "".join(
@@ -355,9 +385,8 @@ def _render_topic_card(row: pd.Series) -> None:
     bar = f"<div style='background:#333;border-radius:4px;height:5px;overflow:hidden'>{bar_inner}</div>"
     rel_label = f"<span style='font-size:0.75em;color:#aaa'>{i18n.LABEL_RELIABILITY} {reliability_pct:.1f} %</span>"
     title_row = (
-        f"{_grade_badge_html(grade)}"
+        f"{_pct_badge_html(reliability_pct)}"
         f"<strong style='font-size:1.0em;color:#fff;margin-left:8px'>{_truncate(topic, 70)}</strong>"
-        f"{div_badge}"
         f"<span style='color:#aaa;font-size:0.85em;margin-left:8px'>{articles} {i18n.LABEL_ARTICLES} &nbsp;{icons}</span>"
         f"<span style='margin-left:auto'>{i18n.LABEL_RISK}: {risk_str}</span>"
     )
@@ -386,7 +415,7 @@ def _render_scatter(df: pd.DataFrame) -> None:
     if plot_df.empty:
         return
     plot_df["label"] = plot_df["topic"].apply(lambda t: _truncate(t, 40))
-    plot_df["grade"] = plot_df["composite_risk"].apply(grade_topic)
+    plot_df["reliability_pct"] = ((1.0 - plot_df["composite_risk"]) * 100).round(1)
     fig = px.scatter(
         plot_df,
         x="sentiment_extremity",
@@ -396,7 +425,7 @@ def _render_scatter(df: pd.DataFrame) -> None:
         range_color=[0.0, 1.0],
         size="articles",
         hover_name="label",
-        hover_data={"grade": True, "composite_risk": ":.2f", "articles": True},
+        hover_data={"reliability_pct": ":.1f", "composite_risk": ":.2f", "articles": True},
         labels={
             "sentiment_extremity": i18n.AXIS_SENTIMENT,
             "sensationalism": i18n.AXIS_SENSATIONALISM,
@@ -410,15 +439,15 @@ def _render_scatter(df: pd.DataFrame) -> None:
 
 def _render_risk_bar(df: pd.DataFrame) -> None:
     plot_df = df.sort_values("composite_risk", ascending=True).copy()
-    grades = plot_df.get("grade", pd.Series(["?"] * len(plot_df), index=plot_df.index))
+    rel_pcts = ((1.0 - plot_df["composite_risk"]) * 100).round(1)
     fig = go.Figure(go.Bar(
         x=plot_df["composite_risk"],
         y=plot_df["topic"].apply(lambda t: _truncate(t, 40)),
         orientation="h",
-        marker_color=[_GRADE_COLOUR.get(str(g), "#999") for g in grades],
-        text=grades,
+        marker_color=[_reliability_colour(p) for p in rel_pcts],
+        text=[f"{p:.0f} %" for p in rel_pcts],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Risiko: %{x:.4f}<br>Note: %{text}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>Risiko: %{x:.4f}<br>Zuverlässigkeit: %{text}<extra></extra>",
     ))
     fig.add_vline(
         x=_HIGH_RISK, line_dash="dash", line_color="#e74c3c",
@@ -458,15 +487,15 @@ def render_topic(topic_id: int, db_path: str) -> None:
         return
 
     row = topic_rows.iloc[0]
-    grade = str(row.get("grade", "?"))
     risk = row.get("composite_risk")
     articles = int(row.get("articles", 0) or 0)
     icons = _platform_icons(str(row.get("platforms", "") or ""))
     computed_at = str(row.get("computed_at", ""))[:19].replace("T", " ")
 
+    rel_pct = float(row.get("reliability_pct") or 50)
     with col_hdr:
         st.markdown(
-            f"## {_grade_badge_html(grade)} &nbsp; {row['topic']}",
+            f"## {_pct_badge_html(rel_pct)} &nbsp; {row['topic']}",
             unsafe_allow_html=True,
         )
         if risk is not None:
@@ -485,9 +514,6 @@ def render_topic(topic_id: int, db_path: str) -> None:
         return
 
     _render_score_breakdown(row)
-    st.markdown("---")
-
-    _render_social_track(row)
     st.markdown("---")
 
     col_radar, col_domain = st.columns(2)
@@ -511,33 +537,24 @@ def _render_score_breakdown(row: pd.Series) -> None:
     st.caption(i18n.SIGNAL_BREAKDOWN_CAPTION)
 
     risk = float(row.get("composite_risk", 0) or 0)
+    avg_article_risk = float(row.get("avg_article_risk", 0) or 0)
+    framing = float(row.get("framing_inconsistency", 0) or 0)
+    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
+    fact = float(row.get("fact_inconsistency", 0) or 0)
+
+    # Sub-signals bundled inside avg_article_risk
     avg_trust = float(row.get("avg_trust", 50) or 50)
     sentiment = float(row.get("sentiment_extremity", 0) or 0)
-    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
-    framing = float(row.get("framing_inconsistency", 0) or 0)
     sensationalism = float(row.get("sensationalism", 0) or 0)
+    attribution = float(row.get("attribution_vagueness", 0) or 0)
 
     signals = [
         (
-            i18n.SIGNAL_NAMES["Source Distrust"],
-            _WEIGHTS["avg_trust"] * (1.0 - avg_trust / 100.0),
-            _WEIGHTS["avg_trust"],
-            f"Ø Vertrauen {avg_trust:.1f}",
-            i18n.SIGNAL_TOOLTIPS["Source Distrust"],
-        ),
-        (
-            i18n.SIGNAL_NAMES["Sentiment Extremity"],
-            _WEIGHTS["avg_sentiment_extremity"] * sentiment,
-            _WEIGHTS["avg_sentiment_extremity"],
-            f"Signal {sentiment * 100:.1f} %",
-            i18n.SIGNAL_TOOLTIPS["Sentiment Extremity"],
-        ),
-        (
-            i18n.SIGNAL_NAMES["Low Coverage"],
-            _WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),
-            _WEIGHTS["coverage_ratio"],
-            f"{coverage_ratio * 100:.1f} % glaubwürdige Domains",
-            i18n.SIGNAL_TOOLTIPS["Low Coverage"],
+            i18n.SIGNAL_NAMES["Article Risk"],
+            _WEIGHTS["avg_article_risk"] * avg_article_risk,
+            _WEIGHTS["avg_article_risk"],
+            f"Ø Artikel-Risiko {avg_article_risk * 100:.1f} %",
+            i18n.SIGNAL_TOOLTIPS["Article Risk"],
         ),
         (
             i18n.SIGNAL_NAMES["Framing Divergence"],
@@ -547,15 +564,22 @@ def _render_score_breakdown(row: pd.Series) -> None:
             i18n.SIGNAL_TOOLTIPS["Framing Divergence"],
         ),
         (
-            i18n.SIGNAL_NAMES["Sensationalism"],
-            _WEIGHTS["sensationalism_avg"] * sensationalism,
-            _WEIGHTS["sensationalism_avg"],
-            f"Signal {sensationalism * 100:.1f} %",
-            i18n.SIGNAL_TOOLTIPS["Sensationalism"],
+            i18n.SIGNAL_NAMES["Low Coverage"],
+            _WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),
+            _WEIGHTS["coverage_ratio"],
+            f"{coverage_ratio * 100:.1f} % glaubwürdige Domains",
+            i18n.SIGNAL_TOOLTIPS["Low Coverage"],
+        ),
+        (
+            i18n.SIGNAL_NAMES["Fact Inconsistency"],
+            _WEIGHTS["fact_inconsistency"] * fact,
+            _WEIGHTS["fact_inconsistency"],
+            f"Signal {fact * 100:.1f} %",
+            i18n.SIGNAL_TOOLTIPS["Fact Inconsistency"],
         ),
     ]
 
-    cols = st.columns(5)
+    cols = st.columns(4)
     for col, (label, contribution, weight, detail, tooltip) in zip(cols, signals):
         share_pct = (contribution / risk * 100) if risk > 0 else 0.0
         c = "#e74c3c" if contribution > 0.10 else "#e67e22" if contribution > 0.05 else "#2ecc71"
@@ -572,7 +596,27 @@ def _render_score_breakdown(row: pd.Series) -> None:
             unsafe_allow_html=True,
         )
 
-    # P4-3: stacked bar waterfall decomposing composite_risk
+    with st.expander(i18n.EXPANDER_ARTICLE_RISK_DETAIL):
+        sub_signals = [
+            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Ø Vertrauen {avg_trust:.1f}"),
+            (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.25, f"{sentiment * 100:.1f} %"),
+            (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.25, f"{sensationalism * 100:.1f} %"),
+            (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.20, f"{attribution * 100:.1f} %"),
+        ]
+        sub_cols = st.columns(4)
+        for sub_col, (label, raw_val, weight, detail) in zip(sub_cols, sub_signals):
+            c = "#e74c3c" if raw_val >= 0.6 else "#e67e22" if raw_val >= 0.3 else "#2ecc71"
+            sub_col.markdown(
+                f"""<div style='border:1px solid #2a2a2a;border-radius:6px;
+                padding:10px;text-align:center'>
+                  <div style='font-size:0.75em;color:#666;margin-bottom:4px'>{label}</div>
+                  <div style='font-size:1.2em;font-weight:bold;color:{c}'>{raw_val * 100:.1f}%</div>
+                  <div style='font-size:0.7em;color:#888'>{detail}</div>
+                  <div style='font-size:0.65em;color:#aaa;margin-top:2px'>Gewicht im Artikel-Risiko: {weight * 100:.0f} %</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
     _render_risk_waterfall(row)
 
     with st.expander(i18n.EXPANDER_HOW_RISK):
@@ -585,22 +629,16 @@ def _render_risk_waterfall(row: pd.Series) -> None:
     if risk <= 0:
         return
 
-    avg_trust = float(row.get("avg_trust", 50) or 50)
-    sentiment = float(row.get("sentiment_extremity", 0) or 0)
-    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
+    avg_article_risk = float(row.get("avg_article_risk", 0) or 0)
     framing = float(row.get("framing_inconsistency", 0) or 0)
-    sensationalism_val = float(row.get("sensationalism", 0) or 0)
-    attribution = float(row.get("attribution_vagueness", 0) or 0)
+    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
     fact = float(row.get("fact_inconsistency", 0) or 0)
 
     contributions = [
-        (_WEIGHTS["avg_trust"] * (1.0 - avg_trust / 100.0),            i18n.SIGNAL_NAMES["Source Distrust"]),
-        (_WEIGHTS["avg_sentiment_extremity"] * sentiment,               i18n.SIGNAL_NAMES["Sentiment Extremity"]),
-        (_WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),           i18n.SIGNAL_NAMES["Low Coverage"]),
-        (_WEIGHTS["framing_inconsistency"] * framing,                   i18n.SIGNAL_NAMES["Framing Divergence"]),
-        (_WEIGHTS["sensationalism_avg"] * sensationalism_val,           i18n.SIGNAL_NAMES["Sensationalism"]),
-        (_WEIGHTS["attribution_vagueness"] * attribution,               i18n.SIGNAL_NAMES["Attribution Vagueness"]),
-        (_WEIGHTS["fact_inconsistency"] * fact,                         i18n.SIGNAL_NAMES["Fact Inconsistency"]),
+        (_WEIGHTS["avg_article_risk"] * avg_article_risk,           i18n.SIGNAL_NAMES["Article Risk"]),
+        (_WEIGHTS["framing_inconsistency"] * framing,               i18n.SIGNAL_NAMES["Framing Divergence"]),
+        (_WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),       i18n.SIGNAL_NAMES["Low Coverage"]),
+        (_WEIGHTS["fact_inconsistency"] * fact,                     i18n.SIGNAL_NAMES["Fact Inconsistency"]),
     ]
 
     fig = go.Figure()
@@ -654,109 +692,6 @@ def _render_risk_waterfall(row: pd.Series) -> None:
     st.caption(i18n.BREAKDOWN_CHART_CAPTION)
 
 
-def _render_social_track(row: pd.Series) -> None:
-    """Render the social (Reddit) risk track and narrative divergence panel."""
-    social_risk_raw = row.get("social_risk")
-    social_risk = None if pd.isna(social_risk_raw) else float(social_risk_raw)
-    div_raw = row.get("narrative_divergence")
-    div_val = None if pd.isna(div_raw) else float(div_raw)
-
-    verified_risk_raw = row.get("composite_risk")
-    verified_risk = 0.0 if verified_risk_raw is None or pd.isna(verified_risk_raw) else float(verified_risk_raw)
-
-    st.subheader(i18n.SECTION_SOCIAL_TRACK)
-
-    with st.expander(i18n.EXPANDER_SOCIAL_TRACK):
-        st.markdown(i18n.EXPANDER_SOCIAL_TRACK_TEXT)
-
-    if social_risk is None:
-        st.info(i18n.SOCIAL_NO_DATA)
-        return
-
-    social_grade = grade_topic(social_risk)
-    div_colour = "#e74c3c" if (div_val or 0) >= 0.3 else "#e67e22" if (div_val or 0) >= 0.15 else "#2ecc71"
-
-    col_v, col_s, col_d = st.columns(3)
-    col_v.metric(
-        i18n.METRIC_VERIFIED_RISK,
-        f"{verified_risk * 100:.1f} %",
-        help=i18n.METRIC_VERIFIED_RISK_HELP,
-    )
-    col_s.metric(
-        i18n.METRIC_SOCIAL_RISK,
-        f"{social_risk * 100:.1f} %",
-        delta=f"{(social_risk - verified_risk) * 100:+.1f} % vs. verifiziert",
-        delta_color="inverse",
-        help=i18n.METRIC_SOCIAL_RISK_HELP,
-    )
-    if div_val is not None:
-        col_d.metric(
-            i18n.METRIC_NARRATIVE_DIV,
-            f"{div_val * 100:.1f} %",
-            help=i18n.METRIC_NARRATIVE_DIV_HELP,
-        )
-
-    social_avg_trust_raw = row.get("social_avg_trust")
-    social_avg_trust = 50.0 if social_avg_trust_raw is None or pd.isna(social_avg_trust_raw) else float(social_avg_trust_raw)
-
-    social_sentiment_raw = row.get("social_avg_sentiment_extremity")
-    social_sentiment = 0.0 if social_sentiment_raw is None or pd.isna(social_sentiment_raw) else float(social_sentiment_raw)
-
-    social_coverage_raw = row.get("social_coverage_ratio")
-    social_coverage = 0.0 if social_coverage_raw is None or pd.isna(social_coverage_raw) else float(social_coverage_raw)
-
-    social_framing_raw = row.get("social_framing_inconsistency")
-    social_framing = 0.0 if social_framing_raw is None or pd.isna(social_framing_raw) else float(social_framing_raw)
-
-    social_sensationalism_raw = row.get("social_sensationalism_avg")
-    social_sensationalism = 0.0 if social_sensationalism_raw is None or pd.isna(social_sensationalism_raw) else float(social_sensationalism_raw)
-
-    signals = [
-        (i18n.SIGNAL_NAMES["Source Distrust"],     _WEIGHTS["avg_trust"] * (1.0 - social_avg_trust / 100.0),      f"Ø Vertrauen {social_avg_trust:.1f}",         i18n.SIGNAL_TOOLTIPS["Source Distrust"]),
-        (i18n.SIGNAL_NAMES["Sentiment Extremity"],  _WEIGHTS["avg_sentiment_extremity"] * social_sentiment,         f"Signal {social_sentiment * 100:.1f} %",       i18n.SIGNAL_TOOLTIPS["Sentiment Extremity"]),
-        (i18n.SIGNAL_NAMES["Low Coverage"],         _WEIGHTS["coverage_ratio"] * (1.0 - social_coverage),           f"{social_coverage * 100:.1f} % glaubwürdig",   i18n.SIGNAL_TOOLTIPS["Low Coverage"]),
-        (i18n.SIGNAL_NAMES["Framing Divergence"],   _WEIGHTS["framing_inconsistency"] * social_framing,             f"Signal {social_framing * 100:.1f} %",         i18n.SIGNAL_TOOLTIPS["Framing Divergence"]),
-        (i18n.SIGNAL_NAMES["Sensationalism"],       _WEIGHTS["sensationalism_avg"] * social_sensationalism,         f"Signal {social_sensationalism * 100:.1f} %",  i18n.SIGNAL_TOOLTIPS["Sensationalism"]),
-    ]
-
-    cols = st.columns(5)
-    for col, (label, contribution, detail, tooltip) in zip(cols, signals):
-        share_pct = (contribution / social_risk * 100) if social_risk > 0 else 0.0
-        c = "#e74c3c" if contribution > 0.10 else "#e67e22" if contribution > 0.05 else "#2ecc71"
-        col.markdown(
-            f"""<div title="{tooltip}" style='border:1px solid #dee2e6;border-radius:8px;
-            padding:12px;text-align:center;min-height:110px;cursor:help'>
-              <div style='font-size:0.78em;color:#555;margin-bottom:4px'>{label}</div>
-              <div style='font-size:1.6em;font-weight:bold;color:{c}'>{contribution * 100:.1f}%</div>
-              <div style='font-size:0.75em;color:#888'>{detail}</div>
-              <div style='font-size:0.68em;color:#aaa;margin-top:4px'>{share_pct:.0f} % des sozialen Risikos</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    st.caption(
-        f"{i18n.CAPTION_SOCIAL_GRADE} {_grade_badge_html(social_grade)} &nbsp; "
-        f"{i18n.CAPTION_SOCIAL_BASED_ON}",
-        unsafe_allow_html=True,
-    )
-
-    if div_val is not None:
-        divergence_text = (
-            i18n.DIVERGENCE_HIGH if div_val >= 0.3
-            else i18n.DIVERGENCE_MED if div_val >= 0.15
-            else i18n.DIVERGENCE_LOW
-        )
-        st.markdown(
-            f"<div style='margin-top:12px;padding:10px 14px;border-left:4px solid {div_colour};"
-            f"background:#0a0a0a;border-radius:0 6px 6px 0'>"
-            f"<strong style='color:{div_colour}'>{i18n.DIVERGENCE_PREFIX}: {div_val * 100:.1f} %</strong>"
-            f"<span style='color:#aaa;font-size:0.85em;margin-left:10px'>"
-            + i18n.DIVERGENCE_VS.format(v=verified_risk * 100, s=social_risk * 100)
-            + f" — {divergence_text}"
-            + "</span></div>",
-            unsafe_allow_html=True,
-        )
-
 
 def _render_radar(row: pd.Series) -> None:
     avg_trust = float(row.get("avg_trust", 50) or 50)
@@ -804,7 +739,7 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
     for a in articles:
         domain = _domain_from_url(a.get("url", "")) or a.get("source", "unknown")
         if domain and domain not in seen:
-            seen[domain] = get_trust_score(domain)
+            seen[domain] = a.get("trust_score", get_trust_score(domain))
 
     if not seen:
         return

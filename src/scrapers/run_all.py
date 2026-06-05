@@ -1,41 +1,42 @@
-"""Full pipeline orchestrator.
+"""Full scrape + topic-discovery pipeline.
 
-Pipeline flow (default):
-    1. Google News RSS (geo=DE) → trending headlines as topic seeds
-    2. RSS pool: fetch articles from 29 curated German sources (trust 5–91)
-    3. Reddit pool: fetch from German subreddits (optional — skipped if no credentials)
-    4. NLP on each headline → generate ordered NewsAPI query variants
-    5. NewsAPI (language=de) → supplement pool articles until target_count reached
-    6. Persist topics + articles linked via topic_sources
-    7. NLP scoring (run run_nlp.py then compute_scores.py)
+Default mode (broad search):
+    1. discover_articles_broad → SearXNG/DDG → ~200–350 articles
+    2. Sentence-transformer clustering → topic candidates
+    3. Per-cluster supplement search + trafilatura body extraction
+    4. Qualify (≥ min_qualify articles with body text) → persist
+
+Curated mode (--no-broad-search):
+    1. Google News RSS → topic seed headlines
+    2. Curated RSS pool → article candidates
+    3. NewsAPI supplement per topic (unless --no-newsapi)
+    4. Qualify → persist
 
 Usage:
     python -m src.scrapers.run_all
-    python -m src.scrapers.run_all --max-topics 15 --articles-per-topic 100
-    python -m src.scrapers.run_all --db-path data/dashboard.db
+    python -m src.scrapers.run_all --target-topics 5 --articles-per-topic 15
+    python -m src.scrapers.run_all --no-broad-search --db-path data/dashboard.db
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
+import os
 import re
 import time
-from collections import Counter
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
+from urllib.parse import urlparse
 
 from src.scrapers.article_fetcher import enrich_articles_with_body
+from src.scrapers.broad_search import discover_articles_broad, search_topic
 from src.scrapers.google_rss_scraper import scrape_google_trends
 from src.scrapers.newsapi_scraper import NewsAPIQuotaError, scrape_newsapi
-from src.scrapers.reddit_scraper import (
-    enrich_with_comments,
-    scrape_reddit_by_keywords,
-    scrape_reddit_german,
-)
 from src.scrapers.rss_scraper import scrape_rss_sources
-from src.utils.db import init_db, insert_items
+from src.utils.db import complete_run, init_db, insert_items, start_run
 from src.utils.models import RawItem
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,12 @@ _INTER_QUERY_DELAY_S: float = 1.0
 # Hard cap on NewsAPI calls per topic. With 15 topics × 6 calls = 90 requests/day,
 # safely under the free-tier limit of 100 requests/day.
 _MAX_API_CALLS_PER_TOPIC: int = 6
-_MAX_REDDIT_SUPPLEMENT_CALLS: int = 3
+
+# Cosine distance threshold for agglomerative topic clustering in Option-A mode.
+# Lower values → tighter, more focused clusters. 0.35 keeps "same story, different
+# outlets" together while separating distinct topics.
+_CLUSTER_DISTANCE_THRESHOLD: float = 0.35
+_CLUSTER_MIN_SIZE: int = 5
 
 
 def _extract_candidates(title: str) -> tuple[list[str], list[str]]:
@@ -151,72 +157,19 @@ def _pool_matches(article: RawItem, candidates: list[str]) -> bool:
 def _build_article_pool(
     rss_days_back: int = 7,
     rss_max_per_feed: int = 20,
-    reddit_limit_per_sub: int = 25,
-    reddit_keywords: list[str] | None = None,
-) -> tuple[dict[str, RawItem], dict[str, RawItem]]:
-    """Fetch articles from curated RSS feeds and Reddit separately.
+) -> dict[str, RawItem]:
+    """Fetch articles from curated RSS feeds.
 
     Returns:
-        (verified_pool, reddit_pool) — two dicts keyed by article id.
-        verified_pool contains curated RSS articles (newsapi/rss/google_news).
-        reddit_pool contains Reddit posts (platform="reddit").
+        Mapping of article id → RawItem from the 45 curated German feeds.
     """
     verified_pool: dict[str, RawItem] = {}
-
     logger.info("Building article pool: RSS feeds...")
     rss_items = scrape_rss_sources(max_per_feed=rss_max_per_feed, days_back=rss_days_back)
     for item in rss_items:
         verified_pool[item["id"]] = item
     logger.info("  RSS pool: %d articles from curated sources", len(verified_pool))
-
-    reddit_pool: dict[str, RawItem] = {}
-
-    logger.info("Building article pool: Reddit hot feed...")
-    for item in scrape_reddit_german(limit_per_sub=reddit_limit_per_sub):
-        reddit_pool[item["id"]] = item
-    logger.info("  Reddit hot feed: %d posts", len(reddit_pool))
-
-    if reddit_keywords:
-        logger.info(
-            "Building article pool: Reddit keyword search (%d keywords)...",
-            len(reddit_keywords),
-        )
-        before = len(reddit_pool)
-        for item in scrape_reddit_by_keywords(reddit_keywords):
-            if item["id"] not in reddit_pool:
-                reddit_pool[item["id"]] = item
-        logger.info("  Reddit keyword search: %d new posts added", len(reddit_pool) - before)
-
-    logger.info(
-        "Pool: %d verified articles, %d Reddit posts",
-        len(verified_pool), len(reddit_pool),
-    )
-    return verified_pool, reddit_pool
-
-
-def _fetch_reddit_for_topic(
-    headline: str,
-    reddit_pool: dict[str, RawItem],
-    max_count: int = 20,
-) -> list[RawItem]:
-    """Draw matching Reddit posts from the pre-built Reddit pool.
-
-    Args:
-        headline: Topic seed headline used to extract candidate keywords.
-        reddit_pool: Pre-built Reddit post pool from _build_article_pool.
-        max_count: Maximum number of posts to return.
-
-    Returns:
-        List of RawItems from Reddit whose titles match the headline keywords.
-    """
-    _, candidates = _extract_candidates(headline)
-    result: dict[str, RawItem] = {}
-    for item in reddit_pool.values():
-        if len(result) >= max_count:
-            break
-        if _pool_matches(item, candidates):
-            result[item["id"]] = item
-    return list(result.values())[:max_count]
+    return verified_pool
 
 
 def _fetch_articles_for_topic(
@@ -230,7 +183,7 @@ def _fetch_articles_for_topic(
 
     First draws matching articles from the pre-built verified pool (curated
     RSS sources), then supplements with NewsAPI calls until target_count is
-    reached. Reddit posts are handled separately by _fetch_reddit_for_topic.
+    reached.
 
     Args:
         headline: Raw RSS headline used as the topic seed.
@@ -315,30 +268,279 @@ def _fetch_articles_for_topic(
     return result
 
 
+def _search_results_to_raw_items(results: list[dict]) -> list[RawItem]:
+    """Convert search result dicts from broad_search into RawItem format."""
+    now = datetime.now(timezone.utc).isoformat()
+    items: list[RawItem] = []
+    for r in results:
+        url = r["url"]
+        items.append({
+            "id": "broad_" + hashlib.sha256(url.encode()).hexdigest()[:12],
+            "title": r.get("title") or url,
+            "description": r.get("snippet") or None,
+            "source": urlparse(url).netloc,
+            "url": url,
+            "platform": "broad_search",
+            "timestamp": now,
+            "engagement": {"score": 0, "comments": 0},
+        })
+    return items
+
+
+def _cluster_into_topics(
+    articles: list[RawItem],
+    n_topics: int,
+    min_cluster_size: int = _CLUSTER_MIN_SIZE,
+    distance_threshold: float = _CLUSTER_DISTANCE_THRESHOLD,
+) -> list[tuple[str, list[RawItem]]]:
+    """Cluster articles by semantic similarity and return topic groups.
+
+    Encodes title+snippet with the sentence-transformer already loaded by the
+    orchestrator (paraphrase-multilingual-mpnet-base-v2), then uses agglomerative
+    clustering so that topics emerge from the data rather than from a curated seed.
+
+    Args:
+        articles: Pool of RawItems from the broad discovery step.
+        n_topics: Target number of topics; returns up to n_topics * 2 candidates
+            to give the qualification step headroom to drop thin clusters.
+        min_cluster_size: Minimum articles per cluster to qualify as a topic.
+        distance_threshold: Cosine distance cut-off for agglomerative clustering.
+
+    Returns:
+        List of (label, [RawItem]) sorted by cluster size descending.
+        Label is the title of the article closest to the cluster centroid.
+    """
+    import numpy as np
+    from sklearn.cluster import AgglomerativeClustering
+
+    if len(articles) < min_cluster_size:
+        logger.warning("Too few articles (%d) for clustering — aborting", len(articles))
+        return []
+
+    # Reuse the model already warm from load_nlp_models(); lazy-loads if standalone.
+    from src.scoring.framing import _get_model
+    model = _get_model()
+
+    texts = [
+        (a.get("title") or "") + ". " + (a.get("description") or "")
+        for a in articles
+    ]
+    logger.info("Encoding %d articles for topic clustering...", len(texts))
+    embeddings = model.encode(
+        texts, batch_size=64, show_progress_bar=False, normalize_embeddings=True,
+    )
+
+    clustering = AgglomerativeClustering(
+        n_clusters=None,
+        metric="cosine",
+        linkage="average",
+        distance_threshold=distance_threshold,
+    )
+    labels = clustering.fit_predict(embeddings)
+
+    clusters: dict[int, list[int]] = {}
+    for idx, label in enumerate(labels):
+        clusters.setdefault(int(label), []).append(idx)
+
+    results: list[tuple[str, list[RawItem]]] = []
+    for cluster_label, indices in clusters.items():
+        if len(indices) < min_cluster_size:
+            continue
+        cluster_embs = embeddings[indices]
+        centroid = np.mean(cluster_embs, axis=0)
+        # Embeddings are L2-normalised so dot product == cosine similarity.
+        best_local = int(np.argmax(cluster_embs @ centroid))
+        topic_label = articles[indices[best_local]].get("title") or f"Thema {cluster_label}"
+        results.append((topic_label, [articles[i] for i in indices]))
+
+    results.sort(key=lambda x: len(x[1]), reverse=True)
+    logger.info(
+        "Clustering: %d raw clusters, %d qualify (min_size=%d), returning top %d candidates",
+        len(clusters), len(results), min_cluster_size, n_topics * 2,
+    )
+    return results[: n_topics * 2]
+
+
+def _run_broad_discovery_pipeline(
+    target_topics: int,
+    articles_per_topic: int,
+    min_qualify: int,
+    db_path,
+    now: str,
+    run_id: int,
+) -> dict:
+    """Option-A pipeline: discover → cluster → enrich, no curated RSS involved.
+
+    Args:
+        target_topics: Number of topics to publish.
+        articles_per_topic: Target articles per topic (used for supplement search).
+        min_qualify: Minimum articles with body text for a cluster to qualify.
+        db_path: SQLite database path.
+        now: ISO-8601 timestamp string for the run.
+
+    Returns:
+        Summary dict matching the shape returned by run_pipeline.
+    """
+    topics_dropped = 0
+    total_fetched = 0
+    searxng_url = os.getenv("SEARXNG_URL") or None
+
+    # ── Step 1: Broad discovery ───────────────────────────────────────────────
+    logger.info("=" * 60)
+    logger.info("Step 1 — Broad discovery (SearXNG/DDG, no curated sources)")
+    logger.info("=" * 60)
+    discovery_results = discover_articles_broad(searxng_url=searxng_url)
+
+    if not discovery_results:
+        logger.warning("Broad discovery returned no articles — aborting")
+        return {
+            "rss_seeds": 0, "topics_created": 0, "topics_dropped": 0,
+            "articles_fetched": 0, "articles_inserted": 0, "quota_exhausted": False,
+        }
+
+    discovery_items = _search_results_to_raw_items(discovery_results)
+    total_fetched += len(discovery_items)
+
+    # ── Step 2: Cluster into topic candidates ─────────────────────────────────
+    logger.info("=" * 60)
+    logger.info("Step 2 — Clustering %d articles into topic candidates", len(discovery_items))
+    logger.info("=" * 60)
+    topic_candidates = _cluster_into_topics(discovery_items, n_topics=target_topics)
+
+    if not topic_candidates:
+        logger.warning("No qualifying clusters formed — aborting")
+        return {
+            "rss_seeds": 0, "topics_created": 0, "topics_dropped": 0,
+            "articles_fetched": total_fetched, "articles_inserted": 0, "quota_exhausted": False,
+        }
+
+    # ── Step 3: Supplement + enrich + qualify ─────────────────────────────────
+    logger.info("=" * 60)
+    logger.info(
+        "Step 3 — Qualifying %d candidate clusters (min articles with body: %d)",
+        len(topic_candidates), min_qualify,
+    )
+    logger.info("=" * 60)
+
+    qualified: list[tuple[str, list[RawItem]]] = []
+
+    for label, cluster_articles in topic_candidates:
+        if len(qualified) >= target_topics:
+            logger.info("  Target of %d topics reached — stopping.", target_topics)
+            break
+
+        logger.info(
+            "  [%2d] %s  (%d cluster articles)",
+            len(qualified) + 1, label[:70], len(cluster_articles),
+        )
+
+        # Supplement with a targeted search if the cluster is below target.
+        existing_urls = {a["url"] for a in cluster_articles}
+        if len(cluster_articles) < articles_per_topic:
+            needed = articles_per_topic - len(cluster_articles)
+            try:
+                extra_results = search_topic(
+                    label,
+                    num_results=max(needed + 10, 40) * 4,
+                    searxng_url=searxng_url,
+                )
+            except RuntimeError as exc:
+                logger.warning("    Supplement search failed for %r: %s", label[:50], exc)
+                extra_results = []
+
+            extra_items = [
+                item for item in _search_results_to_raw_items(extra_results)
+                if item["url"] not in existing_urls
+            ]
+            cluster_articles = cluster_articles + extra_items
+            total_fetched += len(extra_items)
+            logger.info(
+                "    supplemented: +%d articles (total before enrich: %d)",
+                len(extra_items), len(cluster_articles),
+            )
+
+        enrich_articles_with_body(cluster_articles)
+        enriched = [a for a in cluster_articles if a.get("body_text")]
+
+        if len(enriched) < min_qualify:
+            topics_dropped += 1
+            logger.info(
+                "    ✗ dropped — only %d/%d with body text", len(enriched), min_qualify,
+            )
+            continue
+
+        kept = enriched[:articles_per_topic]
+        qualified.append((label, kept))
+        logger.info(
+            "    ✓ qualified — %d articles  (%d/%d done)",
+            len(kept), len(qualified), target_topics,
+        )
+
+    # ── Step 4: Persist ───────────────────────────────────────────────────────
+    conn = init_db(db_path)
+
+    articles_inserted = 0
+    for headline, verified_articles in qualified:
+        cur = conn.execute(
+            "INSERT INTO topics (label, created_at, item_count, run_id) VALUES (?, ?, ?, ?)",
+            (headline[:255], now, len(verified_articles), run_id),
+        )
+        topic_db_id = cur.lastrowid
+        inserted = insert_items(conn, verified_articles)
+        articles_inserted += inserted
+        conn.executemany(
+            "INSERT OR IGNORE INTO topic_sources (topic_id, item_id) VALUES (?, ?)",
+            [(topic_db_id, a["id"]) for a in verified_articles],
+        )
+        conn.commit()
+        logger.info(
+            "    persisted topic_id=%d  run_id=%d  articles=%d  new=%d",
+            topic_db_id, run_id, len(verified_articles), inserted,
+        )
+
+    conn.close()
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("PIPELINE COMPLETE (broad discovery, no curated sources)")
+    logger.info("  Topics published: %d / %d target", len(qualified), target_topics)
+    logger.info("  Topics dropped  : %d (insufficient body text)", topics_dropped)
+    logger.info("  Articles fetched: %d", total_fetched)
+    logger.info("  Articles new    : %d", articles_inserted)
+    logger.info("=" * 60)
+
+    return {
+        "rss_seeds": 0,
+        "topics_created": len(qualified),
+        "topics_dropped": topics_dropped,
+        "articles_fetched": total_fetched,
+        "articles_inserted": articles_inserted,
+        "quota_exhausted": False,
+    }
+
+
 def run_pipeline(
     geo: str = "DE",
     language: str = "de",
     rss_candidates: int = 50,
     target_topics: int = 10,
     articles_per_topic: int = 20,
-    reddit_per_topic: int = 20,
     db_path: str | Path | None = None,
     rss_pool_days_back: int = 7,
     rss_pool_max_per_feed: int = 20,
-    reddit_limit_per_sub: int = 25,
     skip_newsapi: bool = False,
     min_articles_no_newsapi: int = 10,
+    broad_search: bool = False,
 ) -> dict:
-    """Run the full scrape + topic-linking pipeline (two-track).
+    """Run the full scrape + topic-linking pipeline.
 
-    Collects two independent article sets per topic:
-    - Verified track: articles_per_topic items from curated RSS + NewsAPI.
-    - Social track:   reddit_per_topic posts from Reddit (soft limit).
+    Collects verified articles per topic from curated RSS + NewsAPI
+    (or broad_search when --broad-search is set).
 
     A topic qualifies when it reaches the minimum verified article count.
     With NewsAPI enabled that minimum is articles_per_topic (default 20).
     With --no-newsapi the minimum falls back to min_articles_no_newsapi
-    (default 15) because the RSS pool alone rarely covers niche stories.
+    (default 10) because the RSS pool alone rarely covers niche stories.
 
     Args:
         geo: Google News country code (default "DE" = Germany).
@@ -346,20 +548,41 @@ def run_pipeline(
         rss_candidates: How many Google RSS headlines to fetch as topic seeds.
         target_topics: Exact number of topics to publish to the dashboard.
         articles_per_topic: Target verified articles per topic (default 20).
-        reddit_per_topic: Max Reddit posts to link per topic (default 20).
         db_path: SQLite database path. Defaults to data/dashboard.db.
-        rss_pool_days_back: Days back to fetch for the RSS/Reddit pool.
+        rss_pool_days_back: Days back to fetch for the RSS pool.
         rss_pool_max_per_feed: Max articles per RSS feed for the pool.
-        reddit_limit_per_sub: Max posts per subreddit for the pool.
         skip_newsapi: If True, skip all NewsAPI calls (pool-only mode).
         min_articles_no_newsapi: Minimum verified articles to qualify a topic
-            when skip_newsapi=True (default 15, lower than articles_per_topic
+            when skip_newsapi=True (default 10, lower than articles_per_topic
             because the RSS pool alone cannot supply 20 for niche stories).
+        broad_search: If True, use dynamic web search instead of the curated
+            RSS pool. SearXNG is used when SEARXNG_URL is set, otherwise DDG.
 
     Returns:
         Summary dict with counts.
     """
     now = datetime.now(timezone.utc).isoformat()
+
+    min_qualify = min_articles_no_newsapi if (skip_newsapi or broad_search) else articles_per_topic
+
+    # Open DB once here so we can register the run before any scraping starts.
+    conn_early = init_db(db_path)
+    run_id = start_run(conn_early)
+    conn_early.close()
+
+    if broad_search:
+        result = _run_broad_discovery_pipeline(
+            target_topics=target_topics,
+            articles_per_topic=articles_per_topic,
+            min_qualify=min_qualify,
+            db_path=db_path,
+            now=now,
+            run_id=run_id,
+        )
+        conn_done = init_db(db_path)
+        complete_run(conn_done, run_id)
+        conn_done.close()
+        return result
 
     # ── Step 1: Google RSS → candidate seeds ──────────────────────────────────
     logger.info("=" * 60)
@@ -372,37 +595,20 @@ def run_pipeline(
         logger.warning("No RSS seeds found — aborting pipeline.")
         return {"rss_seeds": 0, "topics_created": 0, "articles_inserted": 0}
 
-    # Extract the most frequent proper nouns across all seeds for Reddit search.
-    # Counting frequency across headlines surfaces the most newsworthy entities.
-    kw_counter: Counter[str] = Counter()
-    for seed in rss_seeds:
-        proper, _ = _extract_candidates(seed["title"])
-        for p in proper:
-            kw_counter[p.lower()] += 1
-    reddit_keywords = [kw for kw, _ in kw_counter.most_common(10)]
-    logger.info("  Reddit keywords (%d): %s", len(reddit_keywords), reddit_keywords[:5])
-
-    # ── Step 2: Build article pool from RSS + Reddit ───────────────────────────
+    # ── Step 2: Build article pool from RSS ───────────────────────────────────
     logger.info("=" * 60)
-    logger.info("Step 2 — Building article pool (RSS + Reddit)")
+    logger.info("Step 2 — Building article pool (RSS)")
     logger.info("=" * 60)
-    verified_pool, reddit_pool = _build_article_pool(
+    verified_pool = _build_article_pool(
         rss_days_back=rss_pool_days_back,
         rss_max_per_feed=rss_pool_max_per_feed,
-        reddit_limit_per_sub=reddit_limit_per_sub,
-        reddit_keywords=reddit_keywords,
     )
 
     # ── Steps 3 + 4: collect qualifying topics entirely in memory ─────────────
-    # Each entry: (headline, verified_articles, reddit_articles)
-    qualified: list[tuple[str, list[RawItem], list[RawItem]]] = []
+    qualified: list[tuple[str, list[RawItem]]] = []
     topics_dropped = 0
     total_fetched = 0
     quota_exhausted = False
-
-    # In pool-only mode the RSS alone rarely supplies 20 articles for niche
-    # topics, so we accept a lower count rather than drop most candidates.
-    min_qualify = min_articles_no_newsapi if skip_newsapi else articles_per_topic
 
     logger.info("=" * 60)
     logger.info(
@@ -456,54 +662,22 @@ def run_pipeline(
             )
             continue
 
-        reddit_articles = _fetch_reddit_for_topic(
-            headline=headline,
-            reddit_pool=reddit_pool,
-            max_count=reddit_per_topic,
-        )
-
-        # Supplement from targeted keyword search when pool comes up short
-        if reddit_per_topic > 0 and len(reddit_articles) < reddit_per_topic:
-            _, topic_candidates = _extract_candidates(headline)
-            seen_reddit = {a["id"] for a in reddit_articles}
-            for kw in topic_candidates[:_MAX_REDDIT_SUPPLEMENT_CALLS]:
-                if len(reddit_articles) >= reddit_per_topic:
-                    break
-                extra = scrape_reddit_by_keywords(
-                    [kw],
-                    limit_per_keyword=reddit_per_topic - len(reddit_articles) + 5,
-                )
-                for item in extra:
-                    if len(reddit_articles) >= reddit_per_topic:
-                        break
-                    if item["id"] not in seen_reddit and _pool_matches(item, topic_candidates):
-                        reddit_articles.append(item)
-                        seen_reddit.add(item["id"])
-                        reddit_pool[item["id"]] = item
-            if len(reddit_articles) < reddit_per_topic:
-                logger.warning(
-                    "    Reddit: only %d/%d posts after supplement",
-                    len(reddit_articles), reddit_per_topic,
-                )
-
         # Fetch full article body for all verified articles
-        enrich_articles_with_body(verified_articles, max_per_batch=len(verified_articles))
+        enrich_articles_with_body(verified_articles)
 
-        # Enrich link posts that have no body text with their top comments
-        enrich_with_comments(reddit_articles)
-
-        total_fetched += len(reddit_articles)
-
-        qualified.append((headline, verified_articles, reddit_articles))
+        qualified.append((headline, verified_articles))
         logger.info(
-            "    ✓ qualified  verified=%d  reddit=%d  (%d/%d done)",
-            len(verified_articles), len(reddit_articles),
+            "    ✓ qualified  verified=%d  (%d/%d done)",
+            len(verified_articles),
             len(qualified), target_topics,
         )
 
     # ── Step 4: persist only when we have the full target set ─────────────────
     if quota_exhausted and not qualified:
         logger.warning("No topics collected — keeping existing dashboard data.")
+        conn_fail = init_db(db_path)
+        complete_run(conn_fail, run_id)
+        conn_fail.close()
         return {
             "rss_seeds": len(rss_seeds),
             "topics_created": 0,
@@ -515,30 +689,26 @@ def run_pipeline(
 
     conn = init_db(db_path)
 
-    conn.execute("DELETE FROM topic_sources")
-    conn.execute("DELETE FROM topic_scores")
-    conn.execute("DELETE FROM topics")
-    conn.commit()
-
     articles_inserted = 0
-    for topic_id, (headline, verified_articles, reddit_articles) in enumerate(qualified, start=1):
-        all_articles = verified_articles + reddit_articles
-        conn.execute(
-            "INSERT OR REPLACE INTO topics (id, label, created_at, item_count) VALUES (?, ?, ?, ?)",
-            (topic_id, headline[:255], now, len(all_articles)),
+    for headline, verified_articles in qualified:
+        cur = conn.execute(
+            "INSERT INTO topics (label, created_at, item_count, run_id) VALUES (?, ?, ?, ?)",
+            (headline[:255], now, len(verified_articles), run_id),
         )
-        inserted = insert_items(conn, all_articles)
+        topic_db_id = cur.lastrowid
+        inserted = insert_items(conn, verified_articles)
         articles_inserted += inserted
         conn.executemany(
             "INSERT OR IGNORE INTO topic_sources (topic_id, item_id) VALUES (?, ?)",
-            [(topic_id, a["id"]) for a in all_articles],
+            [(topic_db_id, a["id"]) for a in verified_articles],
         )
         conn.commit()
         logger.info(
-            "    persisted topic_id=%d  verified=%d  reddit=%d  new=%d",
-            topic_id, len(verified_articles), len(reddit_articles), inserted,
+            "    persisted topic_id=%d  run_id=%d  verified=%d  new=%d",
+            topic_db_id, run_id, len(verified_articles), inserted,
         )
 
+    complete_run(conn, run_id)
     conn.close()
 
     logger.info("")
@@ -576,26 +746,18 @@ def main() -> None:
         "--articles-per-topic", type=int, default=20,
         help="Required verified articles per topic — topics that fall short are dropped (default: 20)",
     )
-    parser.add_argument(
-        "--reddit-per-topic", type=int, default=20,
-        help="Max Reddit posts to link per topic for the social risk track (default: 20)",
-    )
     parser.add_argument("--db-path", default=None, help="SQLite DB path")
     parser.add_argument(
         "--rss-pool-days-back", type=int, default=7,
-        help="Days back for RSS/Reddit pool (default: 7)",
+        help="Days back for RSS pool (default: 7)",
     )
     parser.add_argument(
         "--rss-pool-max-per-feed", type=int, default=20,
         help="Max articles per RSS feed for pool (default: 20)",
     )
     parser.add_argument(
-        "--reddit-limit-per-sub", type=int, default=25,
-        help="Max posts per subreddit for pool (default: 25)",
-    )
-    parser.add_argument(
         "--no-newsapi", action="store_true",
-        help="Skip all NewsAPI calls — use only RSS/Reddit pool (useful when quota is exhausted)",
+        help="Skip all NewsAPI calls — use only RSS pool (useful when quota is exhausted)",
     )
     parser.add_argument(
         "--min-articles-no-newsapi", type=int, default=10,
@@ -604,6 +766,14 @@ def main() -> None:
             "(default: 15; lower than --articles-per-topic because the RSS pool alone "
             "cannot supply 20 articles for niche stories)"
         ),
+    )
+    parser.add_argument(
+        "--broad-search", action="store_true", default=True,
+        help="Use dynamic topic search (SearXNG/DDG) instead of the curated RSS pool (default: on)",
+    )
+    parser.add_argument(
+        "--no-broad-search", dest="broad_search", action="store_false",
+        help="Disable broad search and use curated RSS pool only (useful for tests)",
     )
     args = parser.parse_args()
 
@@ -619,13 +789,12 @@ def main() -> None:
         rss_candidates=args.rss_candidates,
         target_topics=args.target_topics,
         articles_per_topic=args.articles_per_topic,
-        reddit_per_topic=args.reddit_per_topic,
         db_path=args.db_path,
         rss_pool_days_back=args.rss_pool_days_back,
         rss_pool_max_per_feed=args.rss_pool_max_per_feed,
-        reddit_limit_per_sub=args.reddit_limit_per_sub,
         skip_newsapi=args.no_newsapi,
         min_articles_no_newsapi=args.min_articles_no_newsapi,
+        broad_search=args.broad_search,
     )
 
 

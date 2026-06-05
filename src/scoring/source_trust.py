@@ -229,7 +229,14 @@ def score_coverage(conn: sqlite3.Connection) -> int:
     Returns:
         Number of topics processed.
     """
-    topic_ids = [r["id"] for r in conn.execute("SELECT id FROM topics").fetchall()]
+    topic_ids = [
+        r["id"] for r in conn.execute(
+            """
+            SELECT id FROM topics
+            WHERE COALESCE(run_id, -1) = COALESCE((SELECT MAX(run_id) FROM topics), -1)
+            """
+        ).fetchall()
+    ]
 
     for topic_id in topic_ids:
         verified = compute_coverage_metrics(

@@ -80,12 +80,12 @@ class TestFullPipeline:
             ("h1", "https://reuters.com/a"),
             ("h2", "https://bbc.com/b"),
             ("h3", "https://apnews.com/c"),
-        ], {"avg_sentiment_extremity": 0.05, "sensationalism_avg": 0.05, "framing_inconsistency": 0.05})
+        ], {"avg_sentiment_extremity": 0.05, "sensationalism_avg": 0.05, "framing_inconsistency": 0.05, "avg_article_risk": 0.10})
 
         _seed_topic(db_conn, 1, "Low trust topic", [
             ("l1", "https://infowars.com/a"),
             ("l2", "https://naturalnews.com/b"),
-        ], {"avg_sentiment_extremity": 0.90, "sensationalism_avg": 0.88, "framing_inconsistency": 0.85})
+        ], {"avg_sentiment_extremity": 0.90, "sensationalism_avg": 0.88, "framing_inconsistency": 0.85, "avg_article_risk": 0.88})
 
         summary = score_all_topics(db_conn)
 
@@ -104,13 +104,13 @@ class TestFullPipeline:
             ("c2", "https://bbc.com/b"),
             ("c3", "https://apnews.com/c"),
             ("c4", "https://npr.org/d"),
-        ], {"avg_sentiment_extremity": 0.05, "sensationalism_avg": 0.05, "framing_inconsistency": 0.05})
+        ], {"avg_sentiment_extremity": 0.05, "sensationalism_avg": 0.05, "framing_inconsistency": 0.05, "avg_article_risk": 0.10})
 
         _seed_topic(db_conn, 1, "Conspiracy topic", [
             ("x1", "https://infowars.com/a"),
             ("x2", "https://naturalnews.com/b"),
             ("x3", "https://beforeitsnews.com/c"),
-        ], {"avg_sentiment_extremity": 0.92, "sensationalism_avg": 0.90, "framing_inconsistency": 0.88})
+        ], {"avg_sentiment_extremity": 0.92, "sensationalism_avg": 0.90, "framing_inconsistency": 0.88, "avg_article_risk": 0.90})
 
         score_all_topics(db_conn)
 
@@ -128,7 +128,7 @@ class TestFullPipeline:
         _seed_topic(db_conn, 0, "Conspiracy", [
             ("x1", "https://infowars.com/a"),
             ("x2", "https://naturalnews.com/b"),
-        ], {"avg_sentiment_extremity": 0.95, "sensationalism_avg": 0.92, "framing_inconsistency": 0.91})
+        ], {"avg_sentiment_extremity": 0.95, "sensationalism_avg": 0.92, "framing_inconsistency": 0.91, "avg_article_risk": 0.92})
 
         score_all_topics(db_conn)
 
@@ -140,7 +140,7 @@ class TestFullPipeline:
     def test_attribution_and_fact_columns_default_to_zero(self, db_conn):
         _seed_topic(db_conn, 0, "No person-a extras", [
             ("a1", "https://reuters.com/a"),
-        ], {"avg_sentiment_extremity": 0.1, "sensationalism_avg": 0.1, "framing_inconsistency": 0.1})
+        ], {"avg_sentiment_extremity": 0.1, "sensationalism_avg": 0.1, "framing_inconsistency": 0.1, "avg_article_risk": 0.15})
 
         score_all_topics(db_conn)
 
@@ -157,7 +157,7 @@ class TestFullPipeline:
         """Adding attribution_vagueness / fact_inconsistency must raise composite_risk."""
         _seed_topic(db_conn, 0, "Without extra signals", [
             ("b1", "https://reuters.com/a"),
-        ], {"avg_sentiment_extremity": 0.5, "sensationalism_avg": 0.5, "framing_inconsistency": 0.5})
+        ], {"avg_sentiment_extremity": 0.5, "sensationalism_avg": 0.5, "framing_inconsistency": 0.5, "avg_article_risk": 0.5})
 
         _seed_topic(db_conn, 1, "With extra signals", [
             ("b2", "https://reuters.com/b"),
@@ -165,6 +165,7 @@ class TestFullPipeline:
             "avg_sentiment_extremity": 0.5,
             "sensationalism_avg": 0.5,
             "framing_inconsistency": 0.5,
+            "avg_article_risk": 0.5,
             "attribution_vagueness": 1.0,
             "fact_inconsistency": 1.0,
         })
@@ -190,7 +191,7 @@ class TestFullPipeline:
     def test_computed_at_is_populated(self, db_conn):
         _seed_topic(db_conn, 0, "Timed topic", [
             ("t1", "https://reuters.com/a"),
-        ], {"avg_sentiment_extremity": 0.2, "sensationalism_avg": 0.2, "framing_inconsistency": 0.2})
+        ], {"avg_sentiment_extremity": 0.2, "sensationalism_avg": 0.2, "framing_inconsistency": 0.2, "avg_article_risk": 0.25})
 
         score_all_topics(db_conn)
 
@@ -203,7 +204,7 @@ class TestFullPipeline:
         _seed_topic(db_conn, 0, "Idempotent topic", [
             ("i1", "https://reuters.com/a"),
             ("i2", "https://bbc.com/b"),
-        ], {"avg_sentiment_extremity": 0.3, "sensationalism_avg": 0.3, "framing_inconsistency": 0.3})
+        ], {"avg_sentiment_extremity": 0.3, "sensationalism_avg": 0.3, "framing_inconsistency": 0.3, "avg_article_risk": 0.35})
 
         score_all_topics(db_conn)
         risk_first = db_conn.execute(
