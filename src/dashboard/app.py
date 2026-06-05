@@ -29,6 +29,7 @@ from src.scoring.article_scorer import score_article
 from src.scoring.attribution import score_attribution_vagueness
 from src.scoring.compute_scores import _MISINFO_THRESHOLD, _WEIGHTS
 from src.scoring.sentiment import _clickbait_score, _sensationalism
+from src.scoring.source_lookup import domain_in_static_csv, generate_disclaimer, get_source_data
 from src.scoring.source_trust import _domain_from_url, get_trust_score
 from src.utils.db import init_db
 
@@ -529,7 +530,7 @@ def render_topic(topic_id: int, db_path: str) -> None:
         st.info(i18n.ARTICLES_NONE)
     else:
         for a in articles_data:
-            _render_article_row(a, topic_id)
+            _render_article_row(a, topic_id, db_path)
 
 
 def _render_score_breakdown(row: pd.Series) -> None:
@@ -774,7 +775,29 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
         st.markdown(i18n.EXPANDER_DOMAIN_TRUST_TEXT)
 
 
-def _render_article_row(article: dict, topic_id: int) -> None:
+def _render_article_disclaimer(domain: str, db_path: str) -> None:
+    """Render a muted source-evaluation caption below an article card.
+
+    Shows nothing for unknown domains where MBFC lookup failed.
+    Shows 'Source data unavailable' for known CSV outlets where lookup failed.
+    Shows the full disclaimer otherwise.
+    """
+    if not domain:
+        return
+    try:
+        data = get_source_data(domain, db_path=db_path)
+    except Exception:
+        return
+    if data.source == "unavailable" and data.confidence == "unavailable":
+        if domain_in_static_csv(domain):
+            st.caption("ℹ️ Source data unavailable")
+        return
+    disclaimer = generate_disclaimer(data)
+    if disclaimer:
+        st.caption(f"ℹ️ {disclaimer}")
+
+
+def _render_article_row(article: dict, topic_id: int, db_path: str = str(_DEFAULT_DB)) -> None:
     platform = article.get("platform", "")
     icon = PLATFORM_ICONS.get(platform, "🔗")
     title = article.get("title", "Unknown")
@@ -800,6 +823,10 @@ def _render_article_row(article: dict, topic_id: int) -> None:
             f" &nbsp;·&nbsp; Sensationalism {sens:.2f}"
             f"</span>",
             unsafe_allow_html=True,
+        )
+        _render_article_disclaimer(
+            _domain_from_url(article.get("url", "")) or article.get("source", ""),
+            db_path,
         )
     with col_nav:
         if item_id and st.button("→", key=f"nav_a_{item_id}", help="Analyse article"):
@@ -855,6 +882,10 @@ def render_article(item_id: str, db_path: str) -> None:
 
     st.markdown(f"### {icon} [{title}]({url})")
     st.caption(f"**{source}** &nbsp;·&nbsp; {timestamp} &nbsp;·&nbsp; {platform}")
+    _render_article_disclaimer(
+        _domain_from_url(url) or source,
+        db_path,
+    )
 
     def _plain_text(text: str) -> None:
         st.markdown(
