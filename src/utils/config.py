@@ -37,6 +37,9 @@ NEWSAPI_KEY = _get("NEWSAPI_KEY")
 TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _get("TELEGRAM_CHAT_ID")
 
+# SearXNG self-hosted instance; falls back to DuckDuckGo when absent
+SEARXNG_URL: str = os.getenv("SEARXNG_URL") or "http://localhost:8080"
+
 # Domain trust — live scoring signals
 GOOGLE_SAFE_BROWSING_KEY = _get("GOOGLE_SAFE_BROWSING_KEY")
 OPEN_PAGE_RANK_KEY = _get("OPEN_PAGE_RANK_KEY")

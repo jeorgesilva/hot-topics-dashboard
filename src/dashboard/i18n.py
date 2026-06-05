@@ -1,198 +1,197 @@
-"""German UI string constants for the Hot Topics Dashboard."""
+"""English UI string constants for the Hot Topics Dashboard."""
 from __future__ import annotations
 
 # ── app-level ──────────────────────────────────────────────────────────────────
 PAGE_TITLE = "Hot Topics Dashboard"
 APP_TITLE = "🔍 Hot Topics"
-APP_CAPTION = "Desinformations-Risiko-Dashboard"
+APP_CAPTION = "Misinformation Risk Dashboard"
 
 # ── home view ──────────────────────────────────────────────────────────────────
-METRIC_TOPICS_ANALYSED = "Analysierte Themen"
+METRIC_TOPICS_ANALYSED = "Topics Analysed"
 METRIC_TOPICS_ANALYSED_HELP = (
-    "Gesamtzahl der identifizierten Themencluster. "
-    "Jeder Cluster gruppiert Artikel zum selben Thema."
+    "Total number of identified topic clusters. "
+    "Each cluster groups articles covering the same subject."
 )
-METRIC_HIGH_RISK = "Hochrisiko-Themen"
-METRIC_AVG_TRUST = "Ø Quellen-Vertrauen"
+METRIC_HIGH_RISK = "High-Risk Topics"
+METRIC_AVG_TRUST = "Avg Source Trust"
 METRIC_AVG_TRUST_HELP = (
-    "Mittlerer Vertrauenswert (0–100) über alle bewerteten Artikel, basierend auf MBFC. "
-    "≥ 60 = glaubwürdig · 40–59 = neutral · < 40 = unzuverlässig."
+    "Mean trust score (0–100) across all scored articles, based on MBFC. "
+    "≥ 60 = credible · 40–59 = neutral · < 40 = unreliable."
 )
-METRIC_AVG_RISK = "Ø Gesamtrisiko"
+METRIC_AVG_RISK = "Avg Composite Risk"
 METRIC_AVG_RISK_HELP = (
-    "Gewichteter Durchschnitt aus 4 NLP- und Abdeckungssignalen. "
-    "40 % Artikel-Risiko (Quellen-Vertrauen, Sentiment, Sensationalismus, Attribution) + "
-    "35 % Framing-Divergenz + 15 % Geringe Abdeckung + 10 % Fakten-Inkonsistenz. "
-    "Höher = mehr Desinformationsrisiko."
+    "Weighted average across 4 NLP and coverage signals. "
+    "40 % article risk (source trust, sentiment, sensationalism, attribution) + "
+    "35 % framing divergence + 15 % low coverage + 10 % fact inconsistency. "
+    "Higher = more misinformation risk."
 )
 
-SECTION_TOPIC_RANKING = "Themen-Ranking"
-LABEL_ARTICLES = "Artikel"
-LABEL_RISK = "Risiko"
-LABEL_RELIABILITY = "Zuverlässigkeit"
-LABEL_UNSCORED = "nicht bewertet"
+SECTION_TOPIC_RANKING = "Topic Ranking"
+LABEL_ARTICLES = "Articles"
+LABEL_RISK = "Risk"
+LABEL_RELIABILITY = "Reliability"
+LABEL_UNSCORED = "unscored"
 LABEL_DIV_TOOLTIP = (
-    "Narrative Divergenz: wie stark sich Reddit-Framing von verifizierten Quellen unterscheidet"
+    "Narrative Divergence: how strongly Reddit framing differs from verified sources"
 )
 
 CAPTION_PIPELINE_MISSING = (
-    "Keine bewerteten Themen gefunden unter `{db_path}`.\n\n"
-    "Pipeline zuerst ausführen:\n"
+    "No scored topics found at `{db_path}`.\n\n"
+    "Run the pipeline first:\n"
     "```\npython src/scrapers/run_all.py\n"
     "python src/scoring/compute_scores.py\n```"
 )
 
 CAPTION_ONLY_SCORED = (
-    "Nur vollständig bewertete Themen (NLP-Pipeline abgeschlossen) sind hier aufgeführt."
+    "Only fully scored topics (NLP pipeline completed) are listed here."
 )
 
 # ── charts (home) ──────────────────────────────────────────────────────────────
-CHART_SENTIMENT_VS_SENS = "Sentiment vs. Sensationalismus"
-CHART_COMPOSITE_RISK = "Gesamtrisiko nach Thema"
-CHART_RISK_THRESHOLD_LABEL = "Schwellenwert"
-AXIS_SENTIMENT = "Sentiment-Extremität"
-AXIS_SENSATIONALISM = "Sensationalismus"
-AXIS_RISK = "Risiko"
-AXIS_COMPOSITE_RISK = "Gesamtrisiko (0–100 %)"
+CHART_SENTIMENT_VS_SENS = "Sentiment vs. Sensationalism"
+CHART_COMPOSITE_RISK = "Composite Risk by Topic"
+CHART_RISK_THRESHOLD_LABEL = "Threshold"
+AXIS_SENTIMENT = "Sentiment Extremity"
+AXIS_SENSATIONALISM = "Sensationalism"
+AXIS_RISK = "Risk"
+AXIS_COMPOSITE_RISK = "Composite Risk (0–100 %)"
 
 # ── topic detail ───────────────────────────────────────────────────────────────
-BTN_BACK = "← Zurück"
-TOPIC_NOT_FOUND = "Thema {topic_id} nicht gefunden."
+BTN_BACK = "← Back"
+TOPIC_NOT_FOUND = "Topic {topic_id} not found."
 TOPIC_NOT_SCORED = (
-    "Dieses Thema wurde noch nicht bewertet. "
-    "Führen Sie `python src/scoring/compute_scores.py` aus."
+    "This topic has not been scored yet. "
+    "Run `python src/scoring/compute_scores.py`."
 )
-CAPTION_COMPOSITE_RISK = "Gesamtrisiko: **{risk:.1f} %**"
-CAPTION_ARTICLES = "{n} Artikel"
-CAPTION_SCORED_AT = "bewertet {ts}"
+CAPTION_COMPOSITE_RISK = "Composite risk: **{risk:.1f} %**"
+CAPTION_ARTICLES = "{n} articles"
+CAPTION_SCORED_AT = "scored {ts}"
 
-SECTION_SIGNAL_BREAKDOWN = "Signal-Aufschlüsselung"
-SIGNAL_BREAKDOWN_CAPTION = "Fahren Sie mit der Maus über eine Karte für eine vollständige Erklärung."
+SECTION_SIGNAL_BREAKDOWN = "Signal Breakdown"
+SIGNAL_BREAKDOWN_CAPTION = "Hover over a card for a full explanation."
 
-SECTION_SOCIAL_TRACK = "Social-Media-Spur (Reddit)"
+SECTION_SOCIAL_TRACK = "Social Media Track (Reddit)"
 SOCIAL_NO_DATA = (
-    "Keine Reddit-Artikel mit diesem Thema verknüpft — Social-Risiko-Spur nicht verfügbar. "
-    "Führen Sie die Pipeline mit aktiviertem Reddit aus, um diesen Bereich zu befüllen."
+    "No Reddit articles linked to this topic — social risk track unavailable. "
+    "Run the pipeline with Reddit enabled to populate this section."
 )
 
-METRIC_VERIFIED_RISK = "Verifiziertes Risiko"
-METRIC_VERIFIED_RISK_HELP = "Gesamtrisiko aus NewsAPI/RSS-Artikeln (journalistische Quellen)."
-METRIC_SOCIAL_RISK = "Soziales Risiko"
-METRIC_SOCIAL_RISK_HELP = "Gesamtrisiko aus Reddit-Beiträgen zu diesem Thema."
-METRIC_NARRATIVE_DIV = "Narrative Divergenz"
+METRIC_VERIFIED_RISK = "Verified Risk"
+METRIC_VERIFIED_RISK_HELP = "Composite risk from NewsAPI/RSS articles (journalistic sources)."
+METRIC_SOCIAL_RISK = "Social Risk"
+METRIC_SOCIAL_RISK_HELP = "Composite risk from Reddit posts about this topic."
+METRIC_NARRATIVE_DIV = "Narrative Divergence"
 METRIC_NARRATIVE_DIV_HELP = (
-    "Absoluter Abstand zwischen verifiziertem und sozialem Risiko. "
-    "Hohe Divergenz bedeutet, dass Reddit-Diskussionen das Thema sehr anders rahmen "
-    "als journalistische Quellen — ein potenzielles Desinformationssignal."
+    "Absolute difference between verified and social risk. "
+    "High divergence means Reddit discussions frame the topic very differently "
+    "from journalistic sources — a potential misinformation signal."
 )
 
-DIVERGENCE_HIGH = "hohe Divergenz — Hinweis auf koordinierte soziale Verstärkung."
-DIVERGENCE_MED = "moderate Divergenz — soziales Framing weicht von der Presseberichterstattung ab."
-DIVERGENCE_LOW = "geringe Divergenz — soziale und Presseberichterstattung weitgehend übereinstimmend."
-DIVERGENCE_PREFIX = "Narrative Divergenz"
-DIVERGENCE_VS = "Verifiziertes Risiko {v:.1f} % vs. Soziales Risiko {s:.1f} %"
+DIVERGENCE_HIGH = "high divergence — indicative of coordinated social amplification."
+DIVERGENCE_MED = "moderate divergence — social framing deviates from press coverage."
+DIVERGENCE_LOW = "low divergence — social and press coverage largely aligned."
+DIVERGENCE_PREFIX = "Narrative Divergence"
+DIVERGENCE_VS = "Verified risk {v:.1f} % vs. Social risk {s:.1f} %"
 
-CAPTION_SOCIAL_GRADE = "Soziale Note:"
-CAPTION_SOCIAL_BASED_ON = "Basierend auf Reddit-Beiträgen zu diesem Thema."
+CAPTION_SOCIAL_GRADE = "Social grade:"
+CAPTION_SOCIAL_BASED_ON = "Based on Reddit posts about this topic."
 
-SECTION_RISK_RADAR = "Risiko-Radar"
-RADAR_CHART_TITLE = "Risiko-Radar"
+SECTION_RISK_RADAR = "Risk Radar"
+RADAR_CHART_TITLE = "Risk Radar"
 RADAR_CAPTION = (
-    "Jede Achse zeigt ein normiertes Risikosignal (0–100 %). "
-    "Eine größere Fläche = höheres Desinformationsrisiko. "
-    "Fahren Sie mit der Maus über einen Punkt, um den genauen Wert zu sehen."
+    "Each axis shows a normalised risk signal (0–100 %). "
+    "Larger area = higher misinformation risk. "
+    "Hover over a point to see the exact value."
 )
 RADAR_CATEGORIES: list[str] = [
-    "Quellen-Misstrauen",
+    "Source Distrust",
     "Sentiment",
-    "Geringe Abdeckung",
+    "Low Coverage",
     "Framing",
-    "Sensationalismus",
+    "Sensationalism",
 ]
 
-SECTION_DOMAIN_TRUST = "Domänen-Vertrauenswerte"
+SECTION_DOMAIN_TRUST = "Domain Trust Scores"
 DOMAIN_TRUST_CAPTION = (
-    "Vertrauenswerte aus Media Bias/Fact Check (MBFC). "
-    "🟢 ≥ 60 = glaubwürdig · 🟠 40–59 = neutral · 🔴 < 40 = unzuverlässig. "
-    "Hohe Streuung zwischen Grün und Rot ist ein Desinformationssignal."
+    "Trust scores from Media Bias/Fact Check (MBFC). "
+    "🟢 ≥ 60 = credible · 🟠 40–59 = neutral · 🔴 < 40 = unreliable. "
+    "High spread between green and red is a misinformation signal."
 )
-DOMAIN_TRUST_NO_DATA = "Keine Domänendaten verfügbar."
+DOMAIN_TRUST_NO_DATA = "No domain data available."
 
-SECTION_ARTICLES = "Artikel"
-ARTICLES_NONE = "Keine Artikel für dieses Thema gefunden."
+SECTION_ARTICLES = "Articles"
+ARTICLES_NONE = "No articles found for this topic."
 
 # ── signal names ───────────────────────────────────────────────────────────────
 SIGNAL_NAMES: dict[str, str] = {
-    "Article Risk":        "📊 Artikel-Risiko",
-    "Source Distrust":     "🏛️ Quellen-Misstrauen",
-    "Sentiment Extremity": "😤 Sentiment-Extremität",
-    "Low Coverage":        "📡 Geringe Abdeckung",
-    "Framing Divergence":  "🔀 Framing-Divergenz",
-    "Sensationalism":      "📢 Sensationalismus",
-    "Attribution Vagueness": "⚠️ Attributions-Vagheit",
-    "Fact Inconsistency":  "📋 Fakten-Inkonsistenz",
+    "Article Risk":          "📊 Article Risk",
+    "Source Distrust":       "🏛️ Source Distrust",
+    "Sentiment Extremity":   "😤 Sentiment Extremity",
+    "Low Coverage":          "📡 Low Coverage",
+    "Framing Divergence":    "🔀 Framing Divergence",
+    "Sensationalism":        "📢 Sensationalism",
+    "Attribution Vagueness": "⚠️ Attribution Vagueness",
+    "Fact Inconsistency":    "📋 Fact Inconsistency",
 }
 
 SIGNAL_DETAIL_LABELS: dict[str, str] = {
-    "Source Distrust":     "Ø Vertrauen {val:.1f}",
+    "Source Distrust":     "Avg trust {val:.1f}",
     "Sentiment Extremity": "Signal {val:.1f} %",
-    "Low Coverage":        "{val:.1f} % glaubwürdige Domains",
+    "Low Coverage":        "{val:.1f} % credible domains",
     "Framing Divergence":  "Signal {val:.1f} %",
     "Sensationalism":      "Signal {val:.1f} %",
 }
 
-# ── signal tooltips (German) ───────────────────────────────────────────────────
-EXPANDER_ARTICLE_RISK_DETAIL = "📊 Aufschlüsselung Artikel-Risiko (4 Sub-Signale)"
+# ── signal tooltips ────────────────────────────────────────────────────────────
+EXPANDER_ARTICLE_RISK_DETAIL = "📊 Article Risk Breakdown (4 sub-signals)"
 
 SIGNAL_TOOLTIPS: dict[str, str] = {
     "Article Risk": (
-        "Zusammengesetztes Artikel-Risiko — kombiniert 4 Signale auf Artikelebene: "
-        "Quellen-Misstrauen (30 %), Sentiment-Extremität (25 %), Sensationalismus (25 %), "
-        "Attributions-Vagheit (20 %). Gewicht im Gesamtrisiko: 40 %."
+        "Composite article risk — combines 4 article-level signals: "
+        "source distrust (30 %), sentiment extremity (25 %), sensationalism (25 %), "
+        "attribution vagueness (20 %). Weight in composite risk: 40 %."
     ),
     "Source Distrust": (
-        "Misst, wie viel der Themenberichterstattung aus wenig vertrauenswürdigen Quellen stammt. "
-        "Gewicht: 25 % des Gesamtrisikos. "
-        "Hoch = die meisten Artikel stammen aus unzuverlässigen Medien. "
-        "Basiert auf MBFC-Vertrauenswerten (0–100) pro Domain."
+        "Measures how much of the topic's coverage comes from low-trust sources. "
+        "Weight: 25 % of composite risk. "
+        "High = most articles originate from unreliable outlets. "
+        "Based on MBFC trust scores (0–100) per domain."
     ),
     "Sentiment Extremity": (
-        "Durchschnittliche emotionale Intensität der Artikel — wie stark das Sentiment vom Neutral abweicht. "
-        "Gewicht: 20 % des Gesamtrisikos. "
-        "Hoch = Artikel verwenden stark polarisierte, emotional aufgeladene Sprache. "
-        "Berechnet mit einem deutschen BERT-Sentimentmodell (oliverguhr/german-sentiment-bert)."
+        "Average emotional intensity of articles — how far sentiment deviates from neutral. "
+        "Weight: 20 % of composite risk. "
+        "High = articles use strongly polarised, emotionally charged language. "
+        "Computed with a German BERT sentiment model (oliverguhr/german-sentiment-bert)."
     ),
     "Low Coverage": (
-        "Anteil der Themenberichterstattung aus unglaubwürdigen Domains. "
-        "Gewicht: 20 % des Gesamtrisikos. "
-        "Hoch = Geschichte wird nur von wenig vertrauenswürdigen Quellen aufgegriffen — "
-        "ein klassisches Desinformationsmuster."
+        "Share of topic coverage coming from non-credible domains. "
+        "Weight: 20 % of composite risk. "
+        "High = story is picked up only by low-trust sources — "
+        "a classic misinformation pattern."
     ),
     "Framing Divergence": (
-        "Wie unterschiedlich vertrauensstarke vs. schwache Quellen das gleiche Thema einrahmen. "
-        "Gewicht: 15 % des Gesamtrisikos. "
-        "Gemessen als Kosinus-Distanz zwischen deutschen RoBERTa-Embeddings der zwei Quell-Tiers. "
-        "Hoch = glaubwürdige und unzuverlässige Quellen erzählen sehr verschiedene Geschichten."
+        "How differently high-trust vs. low-trust sources frame the same topic. "
+        "Weight: 15 % of composite risk. "
+        "Measured as cosine distance between sentence embeddings of the two source tiers. "
+        "High = credible and unreliable sources tell very different stories."
     ),
     "Sensationalism": (
-        "Dichte von GROSSBUCHSTABEN, Ausrufezeichen, reißerischen Begriffen (z. B. 'Schock', 'Skandal') "
-        "und Clickbait-Mustern über alle Artikel. "
-        "Sub-Signal innerhalb des Artikel-Risikos (25 %, effektives Gesamtgewicht 10 %). "
-        "Hoch = starke sensationalistische Rhetorik."
+        "Density of ALL-CAPS, exclamation marks, and clickbait terms across all articles. "
+        "Sub-signal within article risk (25 %, effective total weight 10 %). "
+        "High = strong sensationalist rhetoric."
     ),
     "Fact Inconsistency": (
-        "Inkonsistenz der genannten Entitäten (Personen, Orte, Organisationen) "
-        "zwischen den Artikeln eines Themas. "
-        "Gewicht: 10 % des Gesamtrisikos. "
-        "Hoch = Artikel nennen sehr unterschiedliche Fakten — ein Desinformationssignal."
+        "Inconsistency of named entities (persons, places, organisations) "
+        "across articles in a topic cluster. "
+        "Weight: 10 % of composite risk. "
+        "High = articles cite very different facts — a misinformation signal."
     ),
 }
 
 # ── breakdown chart ────────────────────────────────────────────────────────────
-BREAKDOWN_CHART_TITLE = "Risikobeitrag je Signal"
+BREAKDOWN_CHART_TITLE = "Risk Contribution per Signal"
 BREAKDOWN_CHART_CAPTION = (
-    "Der gestapelte Balken zeigt den gewichteten Beitrag jedes Signals zum Gesamtrisiko. "
-    "Längere Segmente = größerer Einfluss auf das Risiko."
+    "The stacked bar shows the weighted contribution of each signal to the composite risk. "
+    "Longer segments = greater influence on the risk score."
 )
 BREAKDOWN_SIGNAL_COLOURS: list[str] = [
     "#3498db",  # Source Distrust
@@ -205,75 +204,75 @@ BREAKDOWN_SIGNAL_COLOURS: list[str] = [
 ]
 
 # ── article view ───────────────────────────────────────────────────────────────
-SECTION_SIGNAL_ANALYSIS = "Signalanalyse"
-ARTICLE_ANALYSIS_LABEL = "Artikel-Analyse"
-GAUGE_SENSATIONALISM = "Sensationalismus"
-GAUGE_ATTRIBUTION = "Attributions-Vagheit"
-GAUGE_CLICKBAIT = "Clickbait-Muster"
-GAUGE_CAPS = "Großbuchstaben-Dichte"
+SECTION_SIGNAL_ANALYSIS = "Signal Analysis"
+ARTICLE_ANALYSIS_LABEL = "Article Analysis"
+GAUGE_SENSATIONALISM = "Sensationalism"
+GAUGE_ATTRIBUTION = "Attribution Vagueness"
+GAUGE_CLICKBAIT = "Clickbait Patterns"
+GAUGE_CAPS = "ALL-CAPS Density"
 
-ARTICLE_FULL_TEXT = "Vollständiger Artikeltext"
-ARTICLE_SUMMARY = "Zusammenfassung"
-ARTICLE_DESCRIPTION = "Beschreibung"
-ARTICLE_NO_TEXT = "*Kein Text verfügbar.*"
+ARTICLE_FULL_TEXT = "Full Article Text"
+ARTICLE_SUMMARY = "Summary"
+ARTICLE_DESCRIPTION = "Description"
+ARTICLE_NO_TEXT = "*No text available.*"
 
 # ── expander explanations ──────────────────────────────────────────────────────
-EXPANDER_HOW_RISK = "ℹ️ Wie wird das Risiko berechnet?"
+EXPANDER_HOW_RISK = "ℹ️ How is the risk score calculated?"
 EXPANDER_HOW_RISK_TEXT = """\
-Das **Gesamtrisiko** (0–100 %) ist eine gewichtete Summe aus 4 Signalen:
+The **composite risk** (0–100 %) is a weighted sum of 4 signals:
 
-| Signal | Gewicht | Beschreibung |
+| Signal | Weight | Description |
 |---|---|---|
-| 📊 Artikel-Risiko | 40 % | Ø per-Artikel-Risiko (bündelt 4 Sub-Signale — siehe unten) |
-| 🔀 Framing-Divergenz | 35 % | Unterschied in der Darstellung je Quell-Tier |
-| 📡 Geringe Abdeckung | 15 % | Anteil aus unglaubwürdigen Domains |
-| 📋 Fakten-Inkonsistenz | 10 % | Abweichung genannter Entitäten zwischen Quellen |
+| 📊 Article Risk | 40 % | Avg per-article risk (bundles 4 sub-signals — see below) |
+| 🔀 Framing Divergence | 35 % | Difference in framing between source tiers |
+| 📡 Low Coverage | 15 % | Share from non-credible domains |
+| 📋 Fact Inconsistency | 10 % | Entity divergence across sources |
 
-Das **Artikel-Risiko** (40 %) setzt sich wiederum zusammen aus:
+**Article Risk** (40 %) is itself composed of:
 
-| Sub-Signal | Gewicht (Artikel) | Effektives Gewicht |
+| Sub-Signal | Weight (article) | Effective weight |
 |---|---|---|
-| 🏛️ Quellen-Misstrauen | 30 % | 12 % |
-| 😤 Sentiment-Extremität | 25 % | 10 % |
-| 📢 Sensationalismus | 25 % | 10 % |
-| ⚠️ Attributions-Vagheit | 20 % | 8 % |
+| 🏛️ Source Distrust | 30 % | 12 % |
+| 😤 Sentiment Extremity | 25 % | 10 % |
+| 📢 Sensationalism | 25 % | 10 % |
+| ⚠️ Attribution Vagueness | 20 % | 8 % |
 
-Ein Risiko ≥ 50 % wird als potenzielles Desinformationssignal markiert.
+A risk ≥ 50 % is flagged as a potential misinformation signal.
 """
 
-EXPANDER_SOCIAL_TRACK = "ℹ️ Was ist die Social-Media-Spur?"
+EXPANDER_SOCIAL_TRACK = "ℹ️ What is the Social Media Track?"
 EXPANDER_SOCIAL_TRACK_TEXT = """\
-Die **Social-Media-Spur** bewertet Reddit-Beiträge getrennt von journalistischen Quellen.
+The **Social Media Track** scores Reddit posts separately from journalistic sources.
 
-- **Verifiziertes Risiko** — aus NewsAPI/RSS/Google News berechnet
-- **Soziales Risiko** — aus Reddit-Beiträgen berechnet
-- **Narrative Divergenz** — |verifiziertes − soziales Risiko|
+- **Verified Risk** — computed from NewsAPI/RSS/Google News articles
+- **Social Risk** — computed from Reddit posts
+- **Narrative Divergence** — |verified − social risk|
 
-Hohe Divergenz (≥ 30 %) kann auf koordinierte soziale Verstärkung oder **Narrative Hijacking** hinweisen:
-Reddit-Diskussionen rahmen das Thema fundamental anders als die Presse.
+High divergence (≥ 30 %) can indicate coordinated social amplification or **narrative hijacking**:
+Reddit discussions frame the topic fundamentally differently from the press.
 """
 
-EXPANDER_DOMAIN_TRUST = "ℹ️ Woher stammen die Vertrauenswerte?"
+EXPANDER_DOMAIN_TRUST = "ℹ️ Where do trust scores come from?"
 EXPANDER_DOMAIN_TRUST_TEXT = """\
-Vertrauenswerte werden in dieser Reihenfolge aufgelöst:
+Trust scores are resolved in this order:
 
-1. **Media Bias/Fact Check (MBFC)** — manuell kuratierte Datenbank mit 100+ deutschen und internationalen Nachrichtenmedien
-2. **TLD-Heuristik** — Domains außerhalb der MBFC-Liste erhalten einen Wert basierend auf ihrer Top-Level-Domain
+1. **Media Bias/Fact Check (MBFC)** — manually curated database of 100+ German and international news outlets
+2. **TLD heuristic** — domains not in MBFC receive a score based on their top-level domain
    (.gov = 82 · .edu = 78 · .de/.at/.ch = 52 · .com = 46 · .xyz/.top = 30–32)
-3. **Standardwert** — unbekannte Domains erhalten 45 (leichte Abwertung gegenüber neutral)
+3. **Default** — unknown domains receive 45 (slight downgrade from neutral)
 
-Schwellen: 🟢 ≥ 60 glaubwürdig · 🟠 40–59 neutral · 🔴 < 40 unzuverlässig
+Thresholds: 🟢 ≥ 60 credible · 🟠 40–59 neutral · 🔴 < 40 unreliable
 """
 
-EXPANDER_RADAR = "ℹ️ Was zeigt der Risiko-Radar?"
+EXPANDER_RADAR = "ℹ️ What does the Risk Radar show?"
 EXPANDER_RADAR_TEXT = """\
-Der Radar-Chart visualisiert 5 Risikosignale gleichzeitig:
+The radar chart visualises 5 risk signals simultaneously:
 
-- **Quellen-Misstrauen** — wie hoch der Anteil unzuverlässiger Quellen ist
-- **Sentiment** — emotionale Intensität der Berichterstattung
-- **Geringe Abdeckung** — wie viele Domains nicht glaubwürdig sind
-- **Framing** — wie unterschiedlich verschiedene Quellen das Thema rahmen
-- **Sensationalismus** — Dichte reißerischer Sprache
+- **Source Distrust** — share of coverage from unreliable sources
+- **Sentiment** — emotional intensity of reporting
+- **Low Coverage** — how many domains are non-credible
+- **Framing** — how differently sources frame the topic
+- **Sensationalism** — density of sensationalist language
 
-Eine große Fläche = hohes Gesamtrisiko. Ein spitzer Ausreißer auf einer einzelnen Achse zeigt, welches Signal das Risiko treibt.
+Large area = high overall risk. A sharp spike on a single axis shows which signal is driving the risk.
 """

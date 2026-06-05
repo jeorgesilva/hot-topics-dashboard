@@ -58,7 +58,13 @@ _NEWS_QTYPES = (
     "wd:Q15265344", # broadcaster
     "wd:Q7216866",  # news organization
     "wd:Q1047870",  # public broadcaster
+    "wd:Q14350",    # radio station
+    "wd:Q15416",    # public broadcasting service
 )
+
+# Registries that do not expose creation dates via standard WHOIS (e.g. DENIC for .de).
+# For these TLDs we return a neutral 0.5 rather than penalising with 0.0.
+_WHOIS_NO_DATE_TLDS: frozenset[str] = frozenset({".de", ".at", ".ch", ".nl", ".eu"})
 
 
 def init_cache(conn: sqlite3.Connection) -> None:
@@ -158,7 +164,13 @@ def _opr_signal(domain: str, api_key: str) -> float:
 
 
 def _age_signal(domain: str) -> float:
-    """Return domain age normalised to [0, 1], capped at 15 years."""
+    """Return domain age normalised to [0, 1], capped at 15 years.
+
+    Returns 0.5 (neutral) for TLDs whose registries don't expose creation
+    dates via standard WHOIS (e.g. DENIC for .de), rather than penalising
+    with 0.0 every established German/Austrian/Swiss domain.
+    """
+    tld = "." + domain.rsplit(".", 1)[-1].lower()
     try:
         import whois as _whois  # python-whois; optional import guards missing dep
         w = _whois.whois(domain)
@@ -168,8 +180,13 @@ def _age_signal(domain: str) -> float:
         if created:
             age_days = (datetime.now() - created.replace(tzinfo=None)).days
             return min(age_days / (15.0 * 365.25), 1.0)
+        # Registry returned a result but no creation date — common for DENIC.
+        if tld in _WHOIS_NO_DATE_TLDS:
+            return 0.5
     except Exception as exc:
         logger.debug("WHOIS failed for %s: %s", domain, exc)
+        if tld in _WHOIS_NO_DATE_TLDS:
+            return 0.5
     return 0.0
 
 
