@@ -27,11 +27,6 @@ def _get(key: str, required: bool = False) -> str | None:
     return value
 
 
-# Reddit (PRAW)
-REDDIT_CLIENT_ID = _get("REDDIT_CLIENT_ID")
-REDDIT_CLIENT_SECRET = _get("REDDIT_CLIENT_SECRET")
-REDDIT_USER_AGENT = _get("REDDIT_USER_AGENT") or "misinfo-dashboard/1.0"
-
 # YouTube Data API v3 — disabled, not used in current pipeline
 # YOUTUBE_API_KEY = _get("YOUTUBE_API_KEY")
 
@@ -41,3 +36,7 @@ NEWSAPI_KEY = _get("NEWSAPI_KEY")
 # Optional: Telegram notifications
 TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _get("TELEGRAM_CHAT_ID")
+
+# Domain trust — live scoring signals
+GOOGLE_SAFE_BROWSING_KEY = _get("GOOGLE_SAFE_BROWSING_KEY")
+OPEN_PAGE_RANK_KEY = _get("OPEN_PAGE_RANK_KEY")

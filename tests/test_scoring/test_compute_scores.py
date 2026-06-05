@@ -1,15 +1,15 @@
 """Tests for src/scoring/compute_scores.py.
 
 All DB interactions use a file-backed SQLite DB under tmp_path.
-Person-A signals (avg_sentiment_extremity, sensationalism_avg,
-framing_inconsistency) are inserted directly into topic_scores to
-simulate Person A's pipeline having already run.
+avg_article_risk and framing_inconsistency are inserted directly into
+topic_scores to simulate run_nlp having already run.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from src.scoring.article_scorer import score_article
 from src.scoring.compute_scores import (
     _MISINFO_THRESHOLD,
     _WEIGHTS,
@@ -72,26 +72,22 @@ def _seed_topic(conn, topic_id: int, item_ids: list[str], **score_kwargs) -> Non
 # ---------------------------------------------------------------------------
 
 class TestComputeRisk:
-    def test_all_zero_signals_is_zero_risk(self):
-        # avg_trust=100 → (1-100/100)=0; all other signals=0
+    def test_all_safe_signals_is_zero_risk(self):
+        # avg_article_risk=0, framing=0, coverage_ratio=1, fact=0
         risk = compute_risk(
-            avg_trust=100.0,
-            avg_sentiment_extremity=0.0,
-            coverage_ratio=1.0,
+            avg_article_risk=0.0,
             framing_inconsistency=0.0,
-            sensationalism_avg=0.0,
+            coverage_ratio=1.0,
+            fact_inconsistency=0.0,
         )
         assert risk == pytest.approx(0.0)
 
     def test_all_max_signals_is_one_risk(self):
-        # avg_trust=0, all other signals=1, coverage_ratio=0
+        # avg_article_risk=1, framing=1, coverage_ratio=0, fact=1
         risk = compute_risk(
-            avg_trust=0.0,
-            avg_sentiment_extremity=1.0,
-            coverage_ratio=0.0,
+            avg_article_risk=1.0,
             framing_inconsistency=1.0,
-            sensationalism_avg=1.0,
-            attribution_vagueness=1.0,
+            coverage_ratio=0.0,
             fact_inconsistency=1.0,
         )
         assert risk == pytest.approx(1.0)
@@ -101,29 +97,32 @@ class TestComputeRisk:
 
     def test_formula_matches_manual_calculation(self):
         risk = compute_risk(
-            avg_trust=60.0,
-            avg_sentiment_extremity=0.5,
-            coverage_ratio=0.6,
+            avg_article_risk=0.6,
             framing_inconsistency=0.4,
-            sensationalism_avg=0.3,
-            attribution_vagueness=0.2,
-            fact_inconsistency=0.1,
+            coverage_ratio=0.5,
+            fact_inconsistency=0.2,
         )
         expected = (
-            0.25 * (1 - 60 / 100)
-            + 0.20 * 0.5
-            + 0.20 * (1 - 0.6)
-            + 0.15 * 0.4
-            + 0.10 * 0.3
-            + 0.05 * 0.2
-            + 0.05 * 0.1
+            0.40 * 0.6
+            + 0.35 * 0.4
+            + 0.15 * (1 - 0.5)
+            + 0.10 * 0.2
         )
         assert risk == pytest.approx(expected, abs=1e-6)
 
-    def test_high_trust_lowers_risk(self):
-        low_trust = compute_risk(20.0, 0.5, 0.5, 0.5, 0.5)
-        high_trust = compute_risk(90.0, 0.5, 0.5, 0.5, 0.5)
-        assert high_trust < low_trust
+    def test_higher_article_risk_raises_composite(self):
+        low = compute_risk(avg_article_risk=0.1, framing_inconsistency=0.3,
+                           coverage_ratio=0.5, fact_inconsistency=0.1)
+        high = compute_risk(avg_article_risk=0.9, framing_inconsistency=0.3,
+                            coverage_ratio=0.5, fact_inconsistency=0.1)
+        assert high > low
+
+    def test_higher_coverage_lowers_risk(self):
+        low_cov = compute_risk(avg_article_risk=0.5, framing_inconsistency=0.3,
+                               coverage_ratio=0.1)
+        high_cov = compute_risk(avg_article_risk=0.5, framing_inconsistency=0.3,
+                                coverage_ratio=0.9)
+        assert high_cov < low_cov
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +146,9 @@ class TestGradeTopic:
         assert grade_topic(0.79) == "D"   # reliability 0.21
         assert grade_topic(0.81) == "F"   # reliability 0.19
 
-    def test_misinfo_threshold_is_grade_d_or_f(self):
+    def test_misinfo_threshold_maps_to_c_d_or_f(self):
         grade = grade_topic(_MISINFO_THRESHOLD)
-        assert grade in {"D", "F", "C"}
+        assert grade in {"C", "D", "F"}
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +159,8 @@ class TestExplainScore:
     def test_returns_all_expected_keys(self, db_conn):
         insert_items(db_conn, [_make_item("e1")])
         _seed_topic(db_conn, 0, ["e1"],
-                    avg_trust=80.0, trust_variance=5.0, coverage_breadth=3,
-                    coverage_ratio=0.8, avg_sentiment_extremity=0.2,
-                    sensationalism_avg=0.1, framing_inconsistency=0.15,
+                    avg_article_risk=0.3, framing_inconsistency=0.2,
+                    coverage_ratio=0.7, fact_inconsistency=0.1,
                     composite_risk=0.22)
         result = explain_score(0, db_conn)
         assert {"topic_id", "composite_risk", "grade", "contributions"} <= result.keys()
@@ -170,28 +168,28 @@ class TestExplainScore:
     def test_contributions_keys_present(self, db_conn):
         insert_items(db_conn, [_make_item("e2")])
         _seed_topic(db_conn, 1, ["e2"],
-                    avg_trust=50.0, coverage_ratio=0.5,
-                    avg_sentiment_extremity=0.5, sensationalism_avg=0.5,
-                    framing_inconsistency=0.5, composite_risk=0.5)
+                    avg_article_risk=0.5, framing_inconsistency=0.5,
+                    coverage_ratio=0.5, fact_inconsistency=0.5,
+                    composite_risk=0.5)
         result = explain_score(1, db_conn)
         expected_keys = {
-            "source_distrust", "sentiment_extremity",
-            "low_credible_coverage", "framing_inconsistency", "sensationalism",
-            "attribution_vagueness", "fact_inconsistency",
+            "article_risk", "framing_inconsistency",
+            "low_credible_coverage", "fact_inconsistency",
         }
         assert expected_keys == result["contributions"].keys()
 
     def test_contributions_sum_to_composite_risk(self, db_conn):
         insert_items(db_conn, [_make_item("e3")])
-        # Use the formula itself so inserted composite_risk matches contributions
         expected_risk = compute_risk(
-            avg_trust=40.0, avg_sentiment_extremity=0.6,
-            coverage_ratio=0.3, framing_inconsistency=0.7, sensationalism_avg=0.4,
+            avg_article_risk=0.55,
+            framing_inconsistency=0.4,
+            coverage_ratio=0.6,
+            fact_inconsistency=0.2,
         )
         _seed_topic(db_conn, 2, ["e3"],
-                    avg_trust=40.0, coverage_ratio=0.3,
-                    avg_sentiment_extremity=0.6, sensationalism_avg=0.4,
-                    framing_inconsistency=0.7, composite_risk=expected_risk)
+                    avg_article_risk=0.55, framing_inconsistency=0.4,
+                    coverage_ratio=0.6, fact_inconsistency=0.2,
+                    composite_risk=expected_risk)
         result = explain_score(2, db_conn)
         total = sum(result["contributions"].values())
         assert total == pytest.approx(result["composite_risk"], abs=0.01)
@@ -210,9 +208,8 @@ class TestComputeComposite:
     def test_scores_topics_with_all_signals(self, db_conn):
         insert_items(db_conn, [_make_item("c1")])
         _seed_topic(db_conn, 0, ["c1"],
-                    avg_trust=80.0, coverage_ratio=0.8,
-                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
-                    framing_inconsistency=0.1)
+                    avg_article_risk=0.2, framing_inconsistency=0.1,
+                    coverage_ratio=0.8)
         count = compute_composite(db_conn)
         assert count == 1
         row = db_conn.execute(
@@ -221,21 +218,26 @@ class TestComputeComposite:
         assert row["composite_risk"] is not None
         assert 0.0 <= row["composite_risk"] <= 1.0
 
-    def test_skips_topics_missing_person_a_columns(self, db_conn):
+    def test_skips_topics_missing_avg_article_risk(self, db_conn):
         insert_items(db_conn, [_make_item("c2")])
-        _seed_topic(db_conn, 1, ["c2"], avg_trust=80.0, coverage_ratio=0.8)
+        _seed_topic(db_conn, 1, ["c2"], framing_inconsistency=0.3, coverage_ratio=0.8)
+        count = compute_composite(db_conn)
+        assert count == 0
+
+    def test_skips_topics_missing_framing_inconsistency(self, db_conn):
+        insert_items(db_conn, [_make_item("c3")])
+        _seed_topic(db_conn, 2, ["c3"], avg_article_risk=0.4, coverage_ratio=0.8)
         count = compute_composite(db_conn)
         assert count == 0
 
     def test_computed_at_is_set(self, db_conn):
-        insert_items(db_conn, [_make_item("c3")])
-        _seed_topic(db_conn, 2, ["c3"],
-                    avg_trust=50.0, coverage_ratio=0.5,
-                    avg_sentiment_extremity=0.5, sensationalism_avg=0.5,
-                    framing_inconsistency=0.5)
+        insert_items(db_conn, [_make_item("c4")])
+        _seed_topic(db_conn, 3, ["c4"],
+                    avg_article_risk=0.5, framing_inconsistency=0.5,
+                    coverage_ratio=0.5)
         compute_composite(db_conn)
         row = db_conn.execute(
-            "SELECT computed_at FROM topic_scores WHERE topic_id = 2"
+            "SELECT computed_at FROM topic_scores WHERE topic_id = 3"
         ).fetchone()
         assert row["computed_at"] is not None
 
@@ -248,9 +250,8 @@ class TestComputeCompositeSocialTrack:
     def test_social_risk_computed_when_social_signals_present(self, db_conn):
         insert_items(db_conn, [_make_item("s1")])
         _seed_topic(db_conn, 10, ["s1"],
-                    avg_trust=80.0, coverage_ratio=0.8,
-                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
-                    framing_inconsistency=0.1,
+                    avg_article_risk=0.2, framing_inconsistency=0.1,
+                    coverage_ratio=0.8,
                     social_avg_trust=45.0, social_coverage_ratio=0.0,
                     social_avg_sentiment_extremity=0.7,
                     social_sensationalism_avg=0.6,
@@ -267,9 +268,8 @@ class TestComputeCompositeSocialTrack:
     def test_social_risk_null_when_social_signals_missing(self, db_conn):
         insert_items(db_conn, [_make_item("s2")])
         _seed_topic(db_conn, 11, ["s2"],
-                    avg_trust=80.0, coverage_ratio=0.8,
-                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
-                    framing_inconsistency=0.1)
+                    avg_article_risk=0.2, framing_inconsistency=0.1,
+                    coverage_ratio=0.8)
         compute_composite(db_conn)
         row = db_conn.execute(
             "SELECT social_risk, narrative_divergence FROM topic_scores WHERE topic_id = 11"
@@ -279,18 +279,9 @@ class TestComputeCompositeSocialTrack:
 
     def test_narrative_divergence_is_abs_difference(self, db_conn):
         insert_items(db_conn, [_make_item("s3")])
-        verified_risk = compute_risk(
-            avg_trust=80.0, avg_sentiment_extremity=0.1,
-            coverage_ratio=0.8, framing_inconsistency=0.1, sensationalism_avg=0.1,
-        )
-        social_risk_val = compute_risk(
-            avg_trust=45.0, avg_sentiment_extremity=0.7,
-            coverage_ratio=0.0, framing_inconsistency=0.5, sensationalism_avg=0.6,
-        )
         _seed_topic(db_conn, 12, ["s3"],
-                    avg_trust=80.0, coverage_ratio=0.8,
-                    avg_sentiment_extremity=0.1, sensationalism_avg=0.1,
-                    framing_inconsistency=0.1,
+                    avg_article_risk=0.2, framing_inconsistency=0.1,
+                    coverage_ratio=0.8,
                     social_avg_trust=45.0, social_coverage_ratio=0.0,
                     social_avg_sentiment_extremity=0.7,
                     social_sensationalism_avg=0.6,
@@ -304,16 +295,14 @@ class TestComputeCompositeSocialTrack:
 
     def test_higher_social_sensationalism_raises_social_risk(self, db_conn):
         insert_items(db_conn, [_make_item("s4"), _make_item("s5")])
-        base_kwargs = dict(
-            avg_trust=70.0, coverage_ratio=0.7,
-            avg_sentiment_extremity=0.2, sensationalism_avg=0.2,
-            framing_inconsistency=0.2,
+        base = dict(
+            avg_article_risk=0.3, framing_inconsistency=0.2, coverage_ratio=0.7,
             social_avg_trust=50.0, social_coverage_ratio=0.1,
             social_framing_inconsistency=0.3,
         )
-        _seed_topic(db_conn, 20, ["s4"], **base_kwargs,
+        _seed_topic(db_conn, 20, ["s4"], **base,
                     social_avg_sentiment_extremity=0.2, social_sensationalism_avg=0.2)
-        _seed_topic(db_conn, 21, ["s5"], **base_kwargs,
+        _seed_topic(db_conn, 21, ["s5"], **base,
                     social_avg_sentiment_extremity=0.8, social_sensationalism_avg=0.9)
         compute_composite(db_conn)
         row_low = db_conn.execute(
@@ -335,14 +324,14 @@ class TestScoreAllTopics:
         assert "coverage_scored" in summary
         assert "composite_scored" in summary
 
-    def test_full_pipeline_high_trust_topic_grades_well(self, db_conn):
-        """A topic covered only by credible sources should get grade A or B."""
+    def test_full_pipeline_low_risk_topic_grades_well(self, db_conn):
+        """A topic with low article risk and good framing should grade A or B."""
         items = [_make_item(f"h{i}", f"https://reuters.com/{i}") for i in range(5)]
         insert_items(db_conn, items)
         _seed_topic(db_conn, 0, [f"h{i}" for i in range(5)],
-                    avg_sentiment_extremity=0.05,
-                    sensationalism_avg=0.05,
-                    framing_inconsistency=0.05)
+                    avg_article_risk=0.05,
+                    framing_inconsistency=0.05,
+                    coverage_ratio=0.9)
 
         score_all_topics(db_conn)
 

@@ -4,18 +4,15 @@ Enriches scraped RawItem dicts with body_text fetched from the article URL.
 Designed to run after the initial scrape, before NLP scoring, to give
 the scoring pipeline substantially more text per article than title+description.
 
-Extraction is best-effort:
-  - Paywalled or bot-protected pages return None silently.
-  - Articles with an already-sufficient description (≥ 300 chars) are skipped.
-  - Reddit platform items are skipped (body is in description or not available).
-  - A configurable cap (max_per_batch) limits how many HTTP requests are made
-    per batch to keep the pipeline's wall-clock time predictable.
+Extraction is best-effort: paywalled or bot-protected pages return None silently.
 """
 
 from __future__ import annotations
 
 import logging
-import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
 
 import trafilatura
 
@@ -23,11 +20,18 @@ from src.utils.models import RawItem
 
 logger = logging.getLogger(__name__)
 
-_MIN_BODY_LEN: int = 100  # discard extracted bodies shorter than this
+_MIN_BODY_LEN: int = 100
 
-# Reddit posts are their own content — fetching the linked URL would just
-# duplicate an external article already covered by the verified track.
-_SKIP_PLATFORMS: frozenset[str] = frozenset({"reddit"})
+_domain_semaphores: dict[str, threading.Semaphore] = {}
+_semaphores_lock = threading.Lock()
+
+
+def _get_domain_semaphore(url: str, max_concurrent: int = 2) -> threading.Semaphore:
+    domain = urlparse(url).netloc
+    with _semaphores_lock:
+        if domain not in _domain_semaphores:
+            _domain_semaphores[domain] = threading.Semaphore(max_concurrent)
+    return _domain_semaphores[domain]
 
 
 def fetch_full_text(url: str) -> str | None:
@@ -58,51 +62,52 @@ def fetch_full_text(url: str) -> str | None:
         return None
 
 
-def enrich_articles_with_body(
-    articles: list[RawItem],
-    delay_s: float = 0.4,
-    max_per_batch: int = 25,
-) -> int:
-    """Fetch full article body text for all non-Reddit articles (in-place).
+def _fetch_body_for_article(article: RawItem) -> tuple[str, str | None]:
+    """Fetch body text for a single article with per-domain rate limiting.
+
+    Args:
+        article: RawItem to fetch body for.
+
+    Returns:
+        Tuple of (article_id, body_text_or_None).
+    """
+    sem = _get_domain_semaphore(article["url"])
+    sem.acquire()
+    try:
+        return (article["id"], fetch_full_text(article["url"]))
+    except Exception as exc:
+        logger.debug("unexpected error fetching %s: %s", article["url"], exc)
+        return (article["id"], None)
+    finally:
+        sem.release()
+
+
+def enrich_articles_with_body(articles: list[RawItem]) -> None:
+    """Fetch full article body text for all articles (in-place).
 
     Adds a 'body_text' key to each successfully enriched article dict.
-    Reddit articles are skipped because their post content is already in
-    description, and their linked URL points to external articles covered
-    by the verified track.
-
     Articles that fail extraction (paywall, 403, timeout) are left without
     a body_text key — the preprocessor falls back to title + description.
 
     Args:
         articles: RawItem dicts from scrapers. Modified in-place.
-        delay_s: Seconds to sleep between HTTP requests.
-        max_per_batch: Maximum fetch attempts per call (safety cap).
-
-    Returns:
-        Number of articles successfully enriched.
     """
-    candidates = [
-        a for a in articles
-        if a.get("platform") not in _SKIP_PLATFORMS
-    ]
+    candidates = list(articles)
 
     if not candidates:
-        return 0
+        return
 
-    to_enrich = candidates[:max_per_batch]
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = dict(executor.map(_fetch_body_for_article, candidates))
+
     enriched = 0
-
-    for i, article in enumerate(to_enrich):
-        if i > 0:
-            time.sleep(delay_s)
-        text = fetch_full_text(article["url"])
-        if text:
-            article["body_text"] = text  # type: ignore[typeddict-unknown-key]
+    for article in candidates:
+        body = results.get(article["id"])
+        if body:
+            article["body_text"] = body  # type: ignore[typeddict-unknown-key]
             enriched += 1
 
     if enriched:
-        logger.info("  Body text enrichment: %d/%d articles enriched", enriched, len(to_enrich))
+        logger.info("  Body text enrichment: %d/%d articles enriched", enriched, len(candidates))
     else:
-        logger.debug("  Body text enrichment: 0/%d articles enriched (paywalls / bots)", len(to_enrich))
-
-    return enriched
+        logger.debug("  Body text enrichment: 0/%d articles enriched (paywalls / bots)", len(candidates))

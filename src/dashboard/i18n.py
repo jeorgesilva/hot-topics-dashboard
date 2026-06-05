@@ -20,10 +20,10 @@ METRIC_AVG_TRUST_HELP = (
 )
 METRIC_AVG_RISK = "Ø Gesamtrisiko"
 METRIC_AVG_RISK_HELP = (
-    "Gewichteter Durchschnitt von 7 NLP- und Abdeckungssignalen. "
-    "25 % Quellen-Misstrauen + 20 % Sentiment + 20 % Geringe Abdeckung + "
-    "15 % Framing-Divergenz + 10 % Sensationalismus + 5 % Attributions-Vagheit + "
-    "5 % Fakten-Inkonsistenz. Höher = mehr Desinformationsrisiko."
+    "Gewichteter Durchschnitt aus 4 NLP- und Abdeckungssignalen. "
+    "40 % Artikel-Risiko (Quellen-Vertrauen, Sentiment, Sensationalismus, Attribution) + "
+    "35 % Framing-Divergenz + 15 % Geringe Abdeckung + 10 % Fakten-Inkonsistenz. "
+    "Höher = mehr Desinformationsrisiko."
 )
 
 SECTION_TOPIC_RANKING = "Themen-Ranking"
@@ -123,6 +123,7 @@ ARTICLES_NONE = "Keine Artikel für dieses Thema gefunden."
 
 # ── signal names ───────────────────────────────────────────────────────────────
 SIGNAL_NAMES: dict[str, str] = {
+    "Article Risk":        "📊 Artikel-Risiko",
     "Source Distrust":     "🏛️ Quellen-Misstrauen",
     "Sentiment Extremity": "😤 Sentiment-Extremität",
     "Low Coverage":        "📡 Geringe Abdeckung",
@@ -141,7 +142,14 @@ SIGNAL_DETAIL_LABELS: dict[str, str] = {
 }
 
 # ── signal tooltips (German) ───────────────────────────────────────────────────
+EXPANDER_ARTICLE_RISK_DETAIL = "📊 Aufschlüsselung Artikel-Risiko (4 Sub-Signale)"
+
 SIGNAL_TOOLTIPS: dict[str, str] = {
+    "Article Risk": (
+        "Zusammengesetztes Artikel-Risiko — kombiniert 4 Signale auf Artikelebene: "
+        "Quellen-Misstrauen (30 %), Sentiment-Extremität (25 %), Sensationalismus (25 %), "
+        "Attributions-Vagheit (20 %). Gewicht im Gesamtrisiko: 40 %."
+    ),
     "Source Distrust": (
         "Misst, wie viel der Themenberichterstattung aus wenig vertrauenswürdigen Quellen stammt. "
         "Gewicht: 25 % des Gesamtrisikos. "
@@ -169,8 +177,14 @@ SIGNAL_TOOLTIPS: dict[str, str] = {
     "Sensationalism": (
         "Dichte von GROSSBUCHSTABEN, Ausrufezeichen, reißerischen Begriffen (z. B. 'Schock', 'Skandal') "
         "und Clickbait-Mustern über alle Artikel. "
-        "Gewicht: 10 % des Gesamtrisikos. "
+        "Sub-Signal innerhalb des Artikel-Risikos (25 %, effektives Gesamtgewicht 10 %). "
         "Hoch = starke sensationalistische Rhetorik."
+    ),
+    "Fact Inconsistency": (
+        "Inkonsistenz der genannten Entitäten (Personen, Orte, Organisationen) "
+        "zwischen den Artikeln eines Themas. "
+        "Gewicht: 10 % des Gesamtrisikos. "
+        "Hoch = Artikel nennen sehr unterschiedliche Fakten — ein Desinformationssignal."
     ),
 }
 
@@ -206,17 +220,23 @@ ARTICLE_NO_TEXT = "*Kein Text verfügbar.*"
 # ── expander explanations ──────────────────────────────────────────────────────
 EXPANDER_HOW_RISK = "ℹ️ Wie wird das Risiko berechnet?"
 EXPANDER_HOW_RISK_TEXT = """\
-Das **Gesamtrisiko** (0–100 %) ist eine gewichtete Summe aus 7 NLP-Signalen:
+Das **Gesamtrisiko** (0–100 %) ist eine gewichtete Summe aus 4 Signalen:
 
 | Signal | Gewicht | Beschreibung |
 |---|---|---|
-| 🏛️ Quellen-Misstrauen | 25 % | Anteil unzuverlässiger Berichterstattung |
-| 😤 Sentiment-Extremität | 20 % | Emotionale Intensität der Artikel |
-| 📡 Geringe Abdeckung | 20 % | Anteil aus unglaubwürdigen Domains |
-| 🔀 Framing-Divergenz | 15 % | Unterschied in der Darstellung je Quell-Tier |
-| 📢 Sensationalismus | 10 % | Reißerische Sprache und Clickbait |
-| ⚠️ Attributions-Vagheit | 5 % | Vage Quellenangaben ("Experten sagen …") |
-| 📋 Fakten-Inkonsistenz | 5 % | Abweichung genannter Entitäten zwischen Quellen |
+| 📊 Artikel-Risiko | 40 % | Ø per-Artikel-Risiko (bündelt 4 Sub-Signale — siehe unten) |
+| 🔀 Framing-Divergenz | 35 % | Unterschied in der Darstellung je Quell-Tier |
+| 📡 Geringe Abdeckung | 15 % | Anteil aus unglaubwürdigen Domains |
+| 📋 Fakten-Inkonsistenz | 10 % | Abweichung genannter Entitäten zwischen Quellen |
+
+Das **Artikel-Risiko** (40 %) setzt sich wiederum zusammen aus:
+
+| Sub-Signal | Gewicht (Artikel) | Effektives Gewicht |
+|---|---|---|
+| 🏛️ Quellen-Misstrauen | 30 % | 12 % |
+| 😤 Sentiment-Extremität | 25 % | 10 % |
+| 📢 Sensationalismus | 25 % | 10 % |
+| ⚠️ Attributions-Vagheit | 20 % | 8 % |
 
 Ein Risiko ≥ 50 % wird als potenzielles Desinformationssignal markiert.
 """

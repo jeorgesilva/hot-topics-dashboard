@@ -112,7 +112,7 @@ def _get_pipeline():
         from transformers import pipeline
         _pipeline = pipeline(
             "sentiment-analysis",
-            model="oliverguhr/german-sentiment-bert",
+            model="mdraw/german-news-sentiment-bert",
             top_k=None,
             tokenizer_kwargs={"truncation": True, "max_length": 512},
         )
