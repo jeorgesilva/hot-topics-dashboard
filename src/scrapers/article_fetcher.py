@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from urllib.parse import urlparse
 
 import trafilatura
@@ -21,6 +22,7 @@ from src.utils.models import RawItem
 logger = logging.getLogger(__name__)
 
 _MIN_BODY_LEN: int = 100
+_MAX_BODY_LEN: int = 50_000
 
 _domain_semaphores: dict[str, threading.Semaphore] = {}
 _semaphores_lock = threading.Lock()
@@ -62,22 +64,58 @@ def fetch_full_text(url: str) -> str | None:
         return None
 
 
-def _fetch_body_for_article(article: RawItem) -> tuple[str, str | None]:
-    """Fetch body text for a single article with per-domain rate limiting.
+def _try_pub_date(downloaded: str) -> str | None:
+    """Extract publication date from downloaded HTML via trafilatura metadata.
+
+    Returns:
+        ISO date string (YYYY-MM-DD) or None if unavailable or unparseable.
+    """
+    try:
+        result = trafilatura.bare_extraction(downloaded, include_comments=False, include_tables=False)
+        if result is None:
+            return None
+        date_str = getattr(result, "date", None)
+        if not date_str or len(date_str) < 10:
+            return None
+        datetime.strptime(date_str[:10], "%Y-%m-%d")  # validate format
+        return date_str[:10]
+    except Exception:
+        return None
+
+
+def _fetch_body_for_article(article: RawItem) -> tuple[str, str | None, str | None]:
+    """Fetch body text and publication date for a single article.
+
+    Downloads once and extracts both text and date to avoid a second HTTP call.
 
     Args:
         article: RawItem to fetch body for.
 
     Returns:
-        Tuple of (article_id, body_text_or_None).
+        Tuple of (article_id, body_text_or_None, pub_date_or_None).
     """
     sem = _get_domain_semaphore(article["url"])
     sem.acquire()
     try:
-        return (article["id"], fetch_full_text(article["url"]))
+        downloaded = trafilatura.fetch_url(article["url"])
+        if not downloaded:
+            return (article["id"], None, None)
+        text = trafilatura.extract(
+            downloaded,
+            include_comments=False,
+            include_tables=False,
+            no_fallback=False,
+            favor_recall=True,
+        )
+        if text:
+            text = text.strip()[:_MAX_BODY_LEN]
+            if len(text) < _MIN_BODY_LEN:
+                text = None
+        pub_date = _try_pub_date(downloaded)
+        return (article["id"], text, pub_date)
     except Exception as exc:
         logger.debug("unexpected error fetching %s: %s", article["url"], exc)
-        return (article["id"], None)
+        return (article["id"], None, None)
     finally:
         sem.release()
 
@@ -95,19 +133,25 @@ def enrich_articles_with_body(articles: list[RawItem]) -> None:
     candidates = list(articles)
 
     if not candidates:
-        return
+        return 0
 
     with ThreadPoolExecutor(max_workers=12) as executor:
-        results = dict(executor.map(_fetch_body_for_article, candidates))
+        results = {
+            id_: (text, date)
+            for id_, text, date in executor.map(_fetch_body_for_article, candidates)
+        }
 
     enriched = 0
     for article in candidates:
-        body = results.get(article["id"])
-        if body:
-            article["body_text"] = body  # type: ignore[typeddict-unknown-key]
+        text, date = results.get(article["id"], (None, None))
+        if text:
+            article["body_text"] = text  # type: ignore[typeddict-unknown-key]
             enriched += 1
+        if date:
+            article["timestamp"] = date  # type: ignore[typeddict-item]
 
     if enriched:
         logger.info("  Body text enrichment: %d/%d articles enriched", enriched, len(candidates))
     else:
         logger.debug("  Body text enrichment: 0/%d articles enriched (paywalls / bots)", len(candidates))
+    return enriched
