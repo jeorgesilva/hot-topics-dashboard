@@ -1,4 +1,4 @@
-"""Hot Topics Misinformation Dashboard — 3-view SPA routing.
+"""NewsRadar Misinformation Dashboard — 3-view SPA routing.
 
 Views:
     ?view=home              — daily topic ranking (default)
@@ -289,9 +289,14 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
         st.title(i18n.APP_TITLE)
         latest_run = load_latest_run(db_path)
         if latest_run and latest_run.get("completed_at"):
-            run_ts = str(latest_run["completed_at"])[:19].replace("T", " ")
+            from datetime import datetime, timezone, timedelta
+            _BERLIN = timezone(timedelta(hours=2))
+            _raw = str(latest_run["completed_at"]).replace(" ", "T")
+            if not _raw.endswith("Z") and "+" not in _raw[10:]:
+                _raw += "+00:00"
+            run_ts = datetime.fromisoformat(_raw).astimezone(_BERLIN).strftime("%Y-%m-%d %H:%M:%S")
             run_id = latest_run["id"]
-            st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Run #{run_id} · updated {run_ts} UTC")
+            st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Run #{run_id} · updated {run_ts} UTC+2")
         else:
             st.caption(i18n.APP_CAPTION)
     with col_settings:
@@ -491,7 +496,15 @@ def render_topic(topic_id: int, db_path: str) -> None:
     risk = row.get("composite_risk")
     articles = int(row.get("articles", 0) or 0)
     icons = _platform_icons(str(row.get("platforms", "") or ""))
-    computed_at = str(row.get("computed_at", ""))[:19].replace("T", " ")
+    from datetime import datetime, timezone, timedelta
+    _BERLIN = timezone(timedelta(hours=2))
+    _raw_ca = str(row.get("computed_at") or "").replace(" ", "T")
+    if _raw_ca and not _raw_ca.endswith("Z") and "+" not in _raw_ca[10:]:
+        _raw_ca += "+00:00"
+    computed_at = (
+        datetime.fromisoformat(_raw_ca).astimezone(_BERLIN).strftime("%Y-%m-%d %H:%M:%S")
+        if _raw_ca else ""
+    )
 
     rel_pct = float(row.get("reliability_pct") or 50)
     with col_hdr:
