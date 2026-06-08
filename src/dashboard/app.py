@@ -325,7 +325,7 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
             icon="🚨",
         )
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric(
         i18n.METRIC_TOPICS_ANALYSED,
         len(df),
@@ -340,11 +340,6 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
         ),
     )
     c3.metric(
-        i18n.METRIC_AVG_TRUST,
-        f"{scored['avg_trust'].mean():.1f} / 100" if not scored.empty else "—",
-        help=i18n.METRIC_AVG_TRUST_HELP,
-    )
-    c4.metric(
         i18n.METRIC_AVG_RISK,
         f"{scored['composite_risk'].mean():.1%}" if not scored.empty else "—",
         help=i18n.METRIC_AVG_RISK_HELP,
@@ -506,12 +501,8 @@ def render_topic(topic_id: int, db_path: str) -> None:
         if _raw_ca else ""
     )
 
-    rel_pct = float(row.get("reliability_pct") or 50)
     with col_hdr:
-        st.markdown(
-            f"## {_pct_badge_html(rel_pct)} &nbsp; {row['topic']}",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"## {row['topic']}")
         if risk is not None:
             st.caption(
                 i18n.CAPTION_COMPOSITE_RISK.format(risk=risk * 100)
@@ -553,7 +544,6 @@ def _render_score_breakdown(row: pd.Series) -> None:
     risk = float(row.get("composite_risk", 0) or 0)
     avg_article_risk = float(row.get("avg_article_risk", 0) or 0)
     framing = float(row.get("framing_inconsistency", 0) or 0)
-    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
     fact = float(row.get("fact_inconsistency", 0) or 0)
 
     # Sub-signals bundled inside avg_article_risk
@@ -578,13 +568,6 @@ def _render_score_breakdown(row: pd.Series) -> None:
             i18n.SIGNAL_TOOLTIPS["Framing Divergence"],
         ),
         (
-            i18n.SIGNAL_NAMES["Low Coverage"],
-            _WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),
-            _WEIGHTS["coverage_ratio"],
-            f"{coverage_ratio * 100:.1f} % credible domains",
-            i18n.SIGNAL_TOOLTIPS["Low Coverage"],
-        ),
-        (
             i18n.SIGNAL_NAMES["Fact Inconsistency"],
             _WEIGHTS["fact_inconsistency"] * fact,
             _WEIGHTS["fact_inconsistency"],
@@ -593,7 +576,7 @@ def _render_score_breakdown(row: pd.Series) -> None:
         ),
     ]
 
-    cols = st.columns(4)
+    cols = st.columns(3)
     for col, (label, contribution, weight, detail, tooltip) in zip(cols, signals):
         share_pct = (contribution / risk * 100) if risk > 0 else 0.0
         c = "#e74c3c" if contribution > 0.10 else "#e67e22" if contribution > 0.05 else "#2ecc71"
@@ -611,18 +594,19 @@ def _render_score_breakdown(row: pd.Series) -> None:
         )
 
     with st.expander(i18n.EXPANDER_ARTICLE_RISK_DETAIL):
+        st.caption(i18n.SIGNAL_BREAKDOWN_CAPTION)
         sub_signals = [
-            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Avg trust {avg_trust:.1f}"),
-            (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.25, f"{sentiment * 100:.1f} %"),
-            (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.25, f"{sensationalism * 100:.1f} %"),
-            (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.20, f"{attribution * 100:.1f} %"),
+            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Avg trust {avg_trust:.1f}",    i18n.SIGNAL_TOOLTIPS["Source Distrust"]),
+            (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.25, f"{sentiment * 100:.1f} %",      i18n.SIGNAL_TOOLTIPS["Sentiment Extremity"]),
+            (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.25, f"{sensationalism * 100:.1f} %", i18n.SIGNAL_TOOLTIPS["Sensationalism"]),
+            (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.20, f"{attribution * 100:.1f} %",    i18n.SIGNAL_TOOLTIPS["Attribution Vagueness"]),
         ]
         sub_cols = st.columns(4)
-        for sub_col, (label, raw_val, weight, detail) in zip(sub_cols, sub_signals):
+        for sub_col, (label, raw_val, weight, detail, tooltip) in zip(sub_cols, sub_signals):
             c = "#e74c3c" if raw_val >= 0.6 else "#e67e22" if raw_val >= 0.3 else "#2ecc71"
             sub_col.markdown(
-                f"""<div style='border:1px solid #2a2a2a;border-radius:6px;
-                padding:10px;text-align:center'>
+                f"""<div title="{tooltip}" style='border:1px solid #2a2a2a;border-radius:6px;
+                padding:10px;text-align:center;cursor:help'>
                   <div style='font-size:0.75em;color:#666;margin-bottom:4px'>{label}</div>
                   <div style='font-size:1.2em;font-weight:bold;color:{c}'>{raw_val * 100:.1f}%</div>
                   <div style='font-size:0.7em;color:#888'>{detail}</div>
@@ -645,13 +629,11 @@ def _render_risk_waterfall(row: pd.Series) -> None:
 
     avg_article_risk = float(row.get("avg_article_risk", 0) or 0)
     framing = float(row.get("framing_inconsistency", 0) or 0)
-    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
     fact = float(row.get("fact_inconsistency", 0) or 0)
 
     contributions = [
         (_WEIGHTS["avg_article_risk"] * avg_article_risk,           i18n.SIGNAL_NAMES["Article Risk"]),
         (_WEIGHTS["framing_inconsistency"] * framing,               i18n.SIGNAL_NAMES["Framing Divergence"]),
-        (_WEIGHTS["coverage_ratio"] * (1.0 - coverage_ratio),       i18n.SIGNAL_NAMES["Low Coverage"]),
         (_WEIGHTS["fact_inconsistency"] * fact,                     i18n.SIGNAL_NAMES["Fact Inconsistency"]),
     ]
 
@@ -669,15 +651,6 @@ def _render_risk_waterfall(row: pd.Series) -> None:
             hovertemplate=f"<b>{name}</b><br>Contribution: {val * 100:.2f} %<extra></extra>",
         ))
 
-    fig.add_vline(
-        x=risk,
-        line_dash="dot",
-        line_color="rgba(255,255,255,0.6)",
-        line_width=1.5,
-        annotation_text=f"Total: {risk * 100:.1f} %",
-        annotation_position="top right",
-        annotation_font_color="#fff",
-    )
     fig.update_layout(
         barmode="stack",
         title=dict(text=i18n.BREAKDOWN_CHART_TITLE, x=0, font=dict(size=14)),
@@ -710,7 +683,6 @@ def _render_risk_waterfall(row: pd.Series) -> None:
 def _render_radar(row: pd.Series) -> None:
     avg_trust = float(row.get("avg_trust", 50) or 50)
     sentiment = float(row.get("sentiment_extremity", 0) or 0)
-    coverage_ratio = float(row.get("coverage_ratio", 0) or 0)
     framing = float(row.get("framing_inconsistency", 0) or 0)
     sensationalism = float(row.get("sensationalism", 0) or 0)
 
@@ -718,7 +690,6 @@ def _render_radar(row: pd.Series) -> None:
     values = [
         1.0 - avg_trust / 100.0,
         sentiment,
-        1.0 - coverage_ratio,
         framing,
         sensationalism,
     ]
