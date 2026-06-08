@@ -20,9 +20,9 @@ METRIC_AVG_TRUST_HELP = (
 )
 METRIC_AVG_RISK = "Avg Composite Risk"
 METRIC_AVG_RISK_HELP = (
-    "Weighted average across 4 NLP and coverage signals. "
+    "Weighted average across 3 NLP signals. "
     "40 % article risk (source trust, sentiment, sensationalism, attribution) + "
-    "35 % framing divergence + 15 % low coverage + 10 % fact inconsistency. "
+    "35 % framing divergence + 10 % fact inconsistency. "
     "Higher = more misinformation risk."
 )
 
@@ -105,7 +105,6 @@ RADAR_CAPTION = (
 RADAR_CATEGORIES: list[str] = [
     "Source Distrust",
     "Sentiment",
-    "Low Coverage",
     "Framing",
     "Sensationalism",
 ]
@@ -126,7 +125,6 @@ SIGNAL_NAMES: dict[str, str] = {
     "Article Risk":          "📊 Article Risk",
     "Source Distrust":       "🏛️ Source Distrust",
     "Sentiment Extremity":   "😤 Sentiment Extremity",
-    "Low Coverage":          "📡 Low Coverage",
     "Framing Divergence":    "🔀 Framing Divergence",
     "Sensationalism":        "📢 Sensationalism",
     "Attribution Vagueness": "⚠️ Attribution Vagueness",
@@ -136,7 +134,6 @@ SIGNAL_NAMES: dict[str, str] = {
 SIGNAL_DETAIL_LABELS: dict[str, str] = {
     "Source Distrust":     "Avg trust {val:.1f}",
     "Sentiment Extremity": "Signal {val:.1f} %",
-    "Low Coverage":        "{val:.1f} % credible domains",
     "Framing Divergence":  "Signal {val:.1f} %",
     "Sensationalism":      "Signal {val:.1f} %",
 }
@@ -146,44 +143,44 @@ EXPANDER_ARTICLE_RISK_DETAIL = "📊 Article Risk Breakdown (4 sub-signals)"
 
 SIGNAL_TOOLTIPS: dict[str, str] = {
     "Article Risk": (
-        "Composite article risk — combines 4 article-level signals: "
+        "Average per-article risk across all articles in this topic cluster. "
+        "Bundles 4 article-level sub-signals: "
         "source distrust (30 %), sentiment extremity (25 %), sensationalism (25 %), "
         "attribution vagueness (20 %). Weight in composite risk: 40 %."
     ),
     "Source Distrust": (
-        "Measures how much of the topic's coverage comes from low-trust sources. "
-        "Weight: 25 % of composite risk. "
-        "High = most articles originate from unreliable outlets. "
-        "Based on MBFC trust scores (0–100) per domain."
+        "Fraction of coverage from low-trust sources: score = (1 − avg_trust / 100). "
+        "Based on MBFC trust scores (0–100) per domain. "
+        "🟢 ≥ 60 credible · 🟠 40–59 neutral · 🔴 < 40 unreliable. "
+        "Weight in article risk: 30 % (effective composite weight: 12 %)."
     ),
     "Sentiment Extremity": (
         "Average emotional intensity of articles — how far sentiment deviates from neutral. "
-        "Weight: 20 % of composite risk. "
         "High = articles use strongly polarised, emotionally charged language. "
-        "Computed with a German BERT sentiment model (oliverguhr/german-sentiment-bert)."
-    ),
-    "Low Coverage": (
-        "Share of topic coverage coming from non-credible domains. "
-        "Weight: 20 % of composite risk. "
-        "High = story is picked up only by low-trust sources — "
-        "a classic misinformation pattern."
+        "Measured with oliverguhr/german-sentiment-bert. "
+        "Weight in article risk: 25 % (effective composite weight: 10 %)."
     ),
     "Framing Divergence": (
-        "How differently high-trust vs. low-trust sources frame the same topic. "
-        "Weight: 15 % of composite risk. "
-        "Measured as cosine distance between sentence embeddings of the two source tiers. "
-        "High = credible and unreliable sources tell very different stories."
+        "How differently articles in this topic cluster frame the same story. "
+        "Measured as pairwise cosine distance between sentence-transformer embeddings. "
+        "High = articles tell very different versions of the same topic — "
+        "a key misinformation signal. Weight in composite risk: 35 %."
     ),
     "Sensationalism": (
-        "Density of ALL-CAPS, exclamation marks, and clickbait terms across all articles. "
-        "Sub-signal within article risk (25 %, effective total weight 10 %). "
-        "High = strong sensationalist rhetoric."
+        "Density of ALL-CAPS words, exclamation marks, and clickbait phrases across articles. "
+        "High = heavy sensationalist rhetoric. "
+        "Weight in article risk: 25 % (effective composite weight: 10 %)."
+    ),
+    "Attribution Vagueness": (
+        "Use of vague sourcing language ('some say', 'sources claim', 'experts believe'). "
+        "High = most claims lack specific, named attribution — a misinformation signal. "
+        "Weight in article risk: 20 % (effective composite weight: 8 %)."
     ),
     "Fact Inconsistency": (
         "Inconsistency of named entities (persons, places, organisations) "
-        "across articles in a topic cluster. "
-        "Weight: 10 % of composite risk. "
-        "High = articles cite very different facts — a misinformation signal."
+        "across articles in the topic cluster. "
+        "High = articles cite very different facts — a misinformation signal. "
+        "Weight in composite risk: 10 %."
     ),
 }
 
@@ -194,13 +191,9 @@ BREAKDOWN_CHART_CAPTION = (
     "Longer segments = greater influence on the risk score."
 )
 BREAKDOWN_SIGNAL_COLOURS: list[str] = [
-    "#3498db",  # Source Distrust
-    "#e74c3c",  # Sentiment Extremity
-    "#9b59b6",  # Low Coverage
-    "#e67e22",  # Framing Divergence
-    "#f1c40f",  # Sensationalism
-    "#1abc9c",  # Attribution Vagueness
-    "#e91e63",  # Fact Inconsistency
+    "#3498db",  # Article Risk
+    "#e74c3c",  # Framing Divergence
+    "#e67e22",  # Fact Inconsistency
 ]
 
 # ── article view ───────────────────────────────────────────────────────────────
@@ -219,14 +212,13 @@ ARTICLE_NO_TEXT = "*No text available.*"
 # ── expander explanations ──────────────────────────────────────────────────────
 EXPANDER_HOW_RISK = "ℹ️ How is the risk score calculated?"
 EXPANDER_HOW_RISK_TEXT = """\
-The **composite risk** (0–100 %) is a weighted sum of 4 signals:
+The **composite risk** (0–100 %) is a weighted sum of 3 signals:
 
 | Signal | Weight | Description |
 |---|---|---|
 | 📊 Article Risk | 40 % | Avg per-article risk (bundles 4 sub-signals — see below) |
-| 🔀 Framing Divergence | 35 % | Difference in framing between source tiers |
-| 📡 Low Coverage | 15 % | Share from non-credible domains |
-| 📋 Fact Inconsistency | 10 % | Entity divergence across sources |
+| 🔀 Framing Divergence | 35 % | How inconsistently articles frame the same topic |
+| 📋 Fact Inconsistency | 10 % | Named-entity divergence across articles |
 
 **Article Risk** (40 %) is itself composed of:
 
@@ -256,23 +248,27 @@ EXPANDER_DOMAIN_TRUST = "ℹ️ Where do trust scores come from?"
 EXPANDER_DOMAIN_TRUST_TEXT = """\
 Trust scores are resolved in this order:
 
-1. **Media Bias/Fact Check (MBFC)** — manually curated database of 100+ German and international news outlets
-2. **TLD heuristic** — domains not in MBFC receive a score based on their top-level domain
-   (.gov = 82 · .edu = 78 · .de/.at/.ch = 52 · .com = 46 · .xyz/.top = 30–32)
-3. **Default** — unknown domains receive 45 (slight downgrade from neutral)
+1. **Google Safe Browsing** — domains flagged as malicious receive a hard floor of 5/100, bypassing all other signals
+2. **Media Bias/Fact Check (MBFC)** — manually curated trust scores for 100+ German and international news outlets; the primary source for well-known domains
+3. **Live scoring for unknown domains** — four signals are combined and cached for 7 days:
+   - **Recognised news organisation** (Wikidata lookup via P856 + news category)
+   - **Domain authority** (OpenPageRank API — optional; improves score accuracy when configured)
+   - **Domain age** (WHOIS lookup, capped at 15 years)
+   - **DNS authentication** (SPF + DMARC records)
+
+   Unknown domain scores are capped at 82 — they cannot exceed top-rated MBFC outlets.
 
 Thresholds: 🟢 ≥ 60 credible · 🟠 40–59 neutral · 🔴 < 40 unreliable
 """
 
 EXPANDER_RADAR = "ℹ️ What does the Risk Radar show?"
 EXPANDER_RADAR_TEXT = """\
-The radar chart visualises 5 risk signals simultaneously:
+The radar chart visualises 4 risk signals simultaneously:
 
-- **Source Distrust** — share of coverage from unreliable sources
-- **Sentiment** — emotional intensity of reporting
-- **Low Coverage** — how many domains are non-credible
-- **Framing** — how differently sources frame the topic
-- **Sensationalism** — density of sensationalist language
+- **Source Distrust** — how much coverage comes from low-trust sources (1 − avg_trust / 100)
+- **Sentiment** — average emotional intensity of articles
+- **Framing** — how inconsistently articles frame the topic (cosine distance between embeddings)
+- **Sensationalism** — density of ALL-CAPS, exclamation marks, and clickbait phrases
 
 Large area = high overall risk. A sharp spike on a single axis shows which signal is driving the risk.
 """
