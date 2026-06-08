@@ -53,10 +53,10 @@ def test_formula_weights():
     attribution_vagueness = 0.2
 
     expected = round(
-        0.30 * (1.0 - trust_score / 100.0)
-        + 0.25 * sentiment_extremity
-        + 0.25 * sensationalism_score
-        + 0.20 * attribution_vagueness,
+        0.15 * (1.0 - trust_score / 100.0)
+        + 0.30 * sentiment_extremity
+        + 0.30 * sensationalism_score
+        + 0.25 * attribution_vagueness,
         4,
     )
     result = score_article(
