@@ -1,9 +1,9 @@
-"""English UI string constants for the Hot Topics Dashboard."""
+"""English UI string constants for the NewsRadar Dashboard."""
 from __future__ import annotations
 
 # ── app-level ──────────────────────────────────────────────────────────────────
-PAGE_TITLE = "Hot Topics Dashboard"
-APP_TITLE = "🔍 Hot Topics"
+PAGE_TITLE = "NewsRadar"
+APP_TITLE = "📡 NewsRadar"
 APP_CAPTION = "Misinformation Risk Dashboard"
 
 # ── home view ──────────────────────────────────────────────────────────────────
