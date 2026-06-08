@@ -1,20 +1,20 @@
 """Full scrape + topic-discovery pipeline.
 
-Default mode (broad search):
-    1. discover_articles_broad → SearXNG/DDG → ~200–350 articles
-    2. Sentence-transformer clustering → topic candidates
-    3. Per-cluster supplement search + trafilatura body extraction
-    4. Qualify (≥ min_qualify articles with body text) → persist
+Default mode (--broad-search, on by default):
+    1. Google News RSS top 10 trending headlines as topic queries
+    2. SearXNG/DDG search per topic; social/listing filter; global dedup
+    3. Trafilatura full-text extraction with text-quality filtering
+       (length, paywall phrases, scrambled-text detection) then persist
 
 Curated mode (--no-broad-search):
-    1. Google News RSS → topic seed headlines
-    2. Curated RSS pool → article candidates
+    1. Google News RSS topic seed headlines
+    2. Curated RSS pool article candidates
     3. NewsAPI supplement per topic (unless --no-newsapi)
-    4. Qualify → persist
+    4. Qualify then persist
 
 Usage:
     python -m src.scrapers.run_all
-    python -m src.scrapers.run_all --target-topics 5 --articles-per-topic 15
+    python -m src.scrapers.run_all --articles-per-topic 15
     python -m src.scrapers.run_all --no-broad-search --db-path data/dashboard.db
 """
 
@@ -32,7 +32,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from src.scrapers.article_fetcher import enrich_articles_with_body
-from src.scrapers.broad_search import discover_articles_broad, search_topic
+from src.scrapers.broad_search import search_topic
 from src.scrapers.google_rss_scraper import scrape_google_trends
 from src.scrapers.newsapi_scraper import NewsAPIQuotaError, scrape_newsapi
 from src.scrapers.rss_scraper import scrape_rss_sources
@@ -64,11 +64,6 @@ _INTER_QUERY_DELAY_S: float = 1.0
 # safely under the free-tier limit of 100 requests/day.
 _MAX_API_CALLS_PER_TOPIC: int = 6
 
-# Cosine distance threshold for agglomerative topic clustering in Option-A mode.
-# Lower values → tighter, more focused clusters. 0.35 keeps "same story, different
-# outlets" together while separating distinct topics.
-_CLUSTER_DISTANCE_THRESHOLD: float = 0.35
-_CLUSTER_MIN_SIZE: int = 5
 _AGE_CUTOFF_DAYS: int = 14
 
 
@@ -78,7 +73,7 @@ def _extract_candidates(title: str) -> tuple[list[str], list[str]]:
     proper_nouns: subset of candidates that start with an uppercase letter.
     all_candidates: words ≥4 chars, not in stopwords, deduplicated.
     """
-    clean = re.sub(r"[„""»«()\[\]{}]", " ", title)
+    clean = re.sub(r'[„""»«()\[\]{}]', " ", title)
     clean = re.sub(r"[-–—]+", " ", clean)
 
     candidates: list[str] = []
@@ -315,239 +310,6 @@ def _search_results_to_raw_items(results: list[dict]) -> list[RawItem]:
     return items
 
 
-def _cluster_into_topics(
-    articles: list[RawItem],
-    n_topics: int,
-    min_cluster_size: int = _CLUSTER_MIN_SIZE,
-    distance_threshold: float = _CLUSTER_DISTANCE_THRESHOLD,
-) -> list[tuple[str, list[RawItem]]]:
-    """Cluster articles by semantic similarity and return topic groups.
-
-    Encodes title+snippet with the sentence-transformer already loaded by the
-    orchestrator (paraphrase-multilingual-mpnet-base-v2), then uses agglomerative
-    clustering so that topics emerge from the data rather than from a curated seed.
-
-    Args:
-        articles: Pool of RawItems from the broad discovery step.
-        n_topics: Target number of topics; returns up to n_topics * 2 candidates
-            to give the qualification step headroom to drop thin clusters.
-        min_cluster_size: Minimum articles per cluster to qualify as a topic.
-        distance_threshold: Cosine distance cut-off for agglomerative clustering.
-
-    Returns:
-        List of (label, [RawItem]) sorted by cluster size descending.
-        Label is the title of the article closest to the cluster centroid.
-    """
-    import numpy as np
-    from sklearn.cluster import AgglomerativeClustering
-
-    if len(articles) < min_cluster_size:
-        logger.warning("Too few articles (%d) for clustering — aborting", len(articles))
-        return []
-
-    # Reuse the model already warm from load_nlp_models(); lazy-loads if standalone.
-    from src.scoring.framing import _get_model
-    model = _get_model()
-
-    texts = [
-        (a.get("title") or "") + ". " + (a.get("description") or "")
-        for a in articles
-    ]
-    logger.info("Encoding %d articles for topic clustering...", len(texts))
-    embeddings = model.encode(
-        texts, batch_size=64, show_progress_bar=False, normalize_embeddings=True,
-    )
-
-    clustering = AgglomerativeClustering(
-        n_clusters=None,
-        metric="cosine",
-        linkage="average",
-        distance_threshold=distance_threshold,
-    )
-    labels = clustering.fit_predict(embeddings)
-
-    clusters: dict[int, list[int]] = {}
-    for idx, label in enumerate(labels):
-        clusters.setdefault(int(label), []).append(idx)
-
-    results: list[tuple[str, list[RawItem]]] = []
-    for cluster_label, indices in clusters.items():
-        if len(indices) < min_cluster_size:
-            continue
-        cluster_embs = embeddings[indices]
-        centroid = np.mean(cluster_embs, axis=0)
-        # Embeddings are L2-normalised so dot product == cosine similarity.
-        best_local = int(np.argmax(cluster_embs @ centroid))
-        topic_label = articles[indices[best_local]].get("title") or f"Thema {cluster_label}"
-        results.append((topic_label, [articles[i] for i in indices]))
-
-    results.sort(key=lambda x: len(x[1]), reverse=True)
-    logger.info(
-        "Clustering: %d raw clusters, %d qualify (min_size=%d), returning top %d candidates",
-        len(clusters), len(results), min_cluster_size, n_topics * 2,
-    )
-    return results[: n_topics * 2]
-
-
-def _run_broad_discovery_pipeline(
-    target_topics: int,
-    articles_per_topic: int,
-    min_qualify: int,
-    db_path,
-    now: str,
-    run_id: int,
-) -> dict:
-    """Option-A pipeline: discover → cluster → enrich, no curated RSS involved.
-
-    Args:
-        target_topics: Number of topics to publish.
-        articles_per_topic: Target articles per topic (used for supplement search).
-        min_qualify: Minimum articles with body text for a cluster to qualify.
-        db_path: SQLite database path.
-        now: ISO-8601 timestamp string for the run.
-
-    Returns:
-        Summary dict matching the shape returned by run_pipeline.
-    """
-    topics_dropped = 0
-    total_fetched = 0
-    searxng_url = os.getenv("SEARXNG_URL") or None
-
-    # ── Step 1: Broad discovery ───────────────────────────────────────────────
-    logger.info("=" * 60)
-    logger.info("Step 1 — Broad discovery (SearXNG/DDG, no curated sources)")
-    logger.info("=" * 60)
-    discovery_results = discover_articles_broad(searxng_url=searxng_url)
-
-    if not discovery_results:
-        logger.warning("Broad discovery returned no articles — aborting")
-        return {
-            "rss_seeds": 0, "topics_created": 0, "topics_dropped": 0,
-            "articles_fetched": 0, "articles_inserted": 0, "quota_exhausted": False,
-        }
-
-    discovery_items = _search_results_to_raw_items(discovery_results)
-    total_fetched += len(discovery_items)
-
-    # ── Step 2: Cluster into topic candidates ─────────────────────────────────
-    logger.info("=" * 60)
-    logger.info("Step 2 — Clustering %d articles into topic candidates", len(discovery_items))
-    logger.info("=" * 60)
-    topic_candidates = _cluster_into_topics(discovery_items, n_topics=target_topics)
-
-    if not topic_candidates:
-        logger.warning("No qualifying clusters formed — aborting")
-        return {
-            "rss_seeds": 0, "topics_created": 0, "topics_dropped": 0,
-            "articles_fetched": total_fetched, "articles_inserted": 0, "quota_exhausted": False,
-        }
-
-    # ── Step 3: Supplement + enrich + qualify ─────────────────────────────────
-    logger.info("=" * 60)
-    logger.info(
-        "Step 3 — Qualifying %d candidate clusters (min articles with body: %d)",
-        len(topic_candidates), min_qualify,
-    )
-    logger.info("=" * 60)
-
-    qualified: list[tuple[str, list[RawItem]]] = []
-
-    for label, cluster_articles in topic_candidates:
-        if len(qualified) >= target_topics:
-            logger.info("  Target of %d topics reached — stopping.", target_topics)
-            break
-
-        logger.info(
-            "  [%2d] %s  (%d cluster articles)",
-            len(qualified) + 1, label[:70], len(cluster_articles),
-        )
-
-        # Supplement with a targeted search if the cluster is below target.
-        existing_urls = {a["url"] for a in cluster_articles}
-        if len(cluster_articles) < articles_per_topic:
-            needed = articles_per_topic - len(cluster_articles)
-            try:
-                extra_results = search_topic(
-                    label,
-                    num_results=max(needed + 10, 40) * 4,
-                    searxng_url=searxng_url,
-                )
-            except RuntimeError as exc:
-                logger.warning("    Supplement search failed for %r: %s", label[:50], exc)
-                extra_results = []
-
-            extra_items = [
-                item for item in _search_results_to_raw_items(extra_results)
-                if item["url"] not in existing_urls
-            ]
-            cluster_articles = cluster_articles + extra_items
-            total_fetched += len(extra_items)
-            logger.info(
-                "    supplemented: +%d articles (total before enrich: %d)",
-                len(extra_items), len(cluster_articles),
-            )
-
-        enrich_articles_with_body(cluster_articles)
-        cluster_articles = _filter_by_age(cluster_articles)
-        enriched = [a for a in cluster_articles if a.get("body_text")]
-
-        if len(enriched) < min_qualify:
-            topics_dropped += 1
-            logger.info(
-                "    ✗ dropped — only %d/%d with body text", len(enriched), min_qualify,
-            )
-            continue
-
-        kept = enriched[:articles_per_topic]
-        qualified.append((label, kept))
-        logger.info(
-            "    ✓ qualified — %d articles  (%d/%d done)",
-            len(kept), len(qualified), target_topics,
-        )
-
-    # ── Step 4: Persist ───────────────────────────────────────────────────────
-    conn = init_db(db_path)
-
-    articles_inserted = 0
-    for headline, verified_articles in qualified:
-        cur = conn.execute(
-            "INSERT INTO topics (label, created_at, item_count, run_id) VALUES (?, ?, ?, ?)",
-            (headline[:255], now, len(verified_articles), run_id),
-        )
-        topic_db_id = cur.lastrowid
-        inserted = insert_items(conn, verified_articles)
-        articles_inserted += inserted
-        conn.executemany(
-            "INSERT OR IGNORE INTO topic_sources (topic_id, item_id) VALUES (?, ?)",
-            [(topic_db_id, a["id"]) for a in verified_articles],
-        )
-        conn.commit()
-        logger.info(
-            "    persisted topic_id=%d  run_id=%d  articles=%d  new=%d",
-            topic_db_id, run_id, len(verified_articles), inserted,
-        )
-
-    conn.close()
-
-    logger.info("")
-    logger.info("=" * 60)
-    logger.info("PIPELINE COMPLETE (broad discovery, no curated sources)")
-    logger.info("  Topics published: %d / %d target", len(qualified), target_topics)
-    logger.info("  Topics dropped  : %d (insufficient body text)", topics_dropped)
-    logger.info("  Articles fetched: %d", total_fetched)
-    logger.info("  Articles new    : %d", articles_inserted)
-    logger.info("=" * 60)
-
-    return {
-        "rss_seeds": 0,
-        "topics_created": len(qualified),
-        "topics_dropped": topics_dropped,
-        "articles_fetched": total_fetched,
-        "articles_inserted": articles_inserted,
-        "quota_exhausted": False,
-    }
-
-
 def run_pipeline(
     geo: str = "DE",
     language: str = "de",
@@ -600,18 +362,114 @@ def run_pipeline(
     conn_early.close()
 
     if broad_search:
-        result = _run_broad_discovery_pipeline(
-            target_topics=target_topics,
-            articles_per_topic=articles_per_topic,
-            min_qualify=min_qualify,
-            db_path=db_path,
-            now=now,
-            run_id=run_id,
-        )
-        conn_done = init_db(db_path)
-        complete_run(conn_done, run_id)
-        conn_done.close()
-        return result
+        # ── Step 1: Google News RSS → top 10 headlines as topic queries ───────
+        logger.info("=" * 60)
+        logger.info("Step 1 — Google News RSS topics (geo=%s, top 10)", geo)
+        logger.info("=" * 60)
+        rss_seeds = scrape_google_trends(geo=geo, max_items=10)
+        logger.info("  %d trending headlines fetched", len(rss_seeds))
+
+        if not rss_seeds:
+            logger.warning("No RSS seeds found — aborting pipeline.")
+            conn_done = init_db(db_path)
+            complete_run(conn_done, run_id)
+            conn_done.close()
+            return {
+                "rss_seeds": 0, "topics_created": 0, "topics_dropped": 0,
+                "articles_fetched": 0, "articles_inserted": 0, "quota_exhausted": False,
+            }
+
+        searxng_url = os.getenv("SEARXNG_URL") or None
+        global_seen_urls: set[str] = set()
+        qualified: list[tuple[str, list[RawItem]]] = []
+        total_fetched = 0
+
+        # ── Steps 2–3: per-topic search + scrape + text-quality filter ────────
+        logger.info("=" * 60)
+        logger.info("Steps 2–3 — Per-topic search, scrape, and text-quality filter")
+        logger.info("=" * 60)
+
+        for seed in rss_seeds:
+            headline = seed["title"]
+            logger.info("  Topic: %s", headline[:80])
+
+            try:
+                results = search_topic(headline, num_results=50, searxng_url=searxng_url)
+            except RuntimeError as exc:
+                logger.warning("    Search failed: %s", exc)
+                continue
+
+            # Deduplicate URLs globally across all topics.
+            articles: list[RawItem] = []
+            for item in _search_results_to_raw_items(results):
+                if item["url"] not in global_seen_urls:
+                    global_seen_urls.add(item["url"])
+                    articles.append(item)
+
+            total_fetched += len(articles)
+            logger.info("    %d articles after global dedup", len(articles))
+
+            if not articles:
+                logger.info("    skipped — all URLs already seen in earlier topics")
+                continue
+
+            # Scrape all articles; paywall/scramble/length filters run inside
+            # article_fetcher._fetch_body_for_article and drop bad text silently.
+            enrich_articles_with_body(articles)
+            articles = _filter_by_age(articles)
+            articles = [a for a in articles if a.get("body_text")]
+
+            if not articles:
+                logger.info("    skipped — no articles with usable body text")
+                continue
+
+            kept = articles[:articles_per_topic]
+            qualified.append((headline, kept))
+            logger.info("    ✓ %d articles with body text", len(kept))
+
+        # ── Persist ───────────────────────────────────────────────────────────
+        conn = init_db(db_path)
+        articles_inserted = 0
+
+        for headline, topic_articles in qualified:
+            cur = conn.execute(
+                "INSERT INTO topics (label, created_at, item_count, run_id) VALUES (?, ?, ?, ?)",
+                (headline[:255], now, len(topic_articles), run_id),
+            )
+            topic_db_id = cur.lastrowid
+            inserted = insert_items(conn, topic_articles)
+            articles_inserted += inserted
+            conn.executemany(
+                "INSERT OR IGNORE INTO topic_sources (topic_id, item_id) VALUES (?, ?)",
+                [(topic_db_id, a["id"]) for a in topic_articles],
+            )
+            conn.commit()
+            logger.info(
+                "    persisted topic_id=%d  run_id=%d  articles=%d  new=%d",
+                topic_db_id, run_id, len(topic_articles), inserted,
+            )
+
+        complete_run(conn, run_id)
+        conn.close()
+
+        topics_dropped = len(rss_seeds) - len(qualified)
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("PIPELINE COMPLETE (RSS-driven broad search)")
+        logger.info("  Topics published: %d / %d RSS seeds", len(qualified), len(rss_seeds))
+        logger.info("  Topics skipped  : %d (no usable articles)", topics_dropped)
+        logger.info("  Articles fetched: %d", total_fetched)
+        logger.info("  Articles new    : %d", articles_inserted)
+        logger.info("=" * 60)
+
+        return {
+            "rss_seeds": len(rss_seeds),
+            "topics_created": len(qualified),
+            "topics_dropped": topics_dropped,
+            "articles_fetched": total_fetched,
+            "articles_inserted": articles_inserted,
+            "quota_exhausted": False,
+        }
 
     # ── Step 1: Google RSS → candidate seeds ──────────────────────────────────
     logger.info("=" * 60)
