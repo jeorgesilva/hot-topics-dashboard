@@ -73,21 +73,17 @@ def _seed_topic(conn, topic_id: int, item_ids: list[str], **score_kwargs) -> Non
 
 class TestComputeRisk:
     def test_all_safe_signals_is_zero_risk(self):
-        # avg_article_risk=0, framing=0, coverage_ratio=1, fact=0
         risk = compute_risk(
             avg_article_risk=0.0,
             framing_inconsistency=0.0,
-            coverage_ratio=1.0,
             fact_inconsistency=0.0,
         )
         assert risk == pytest.approx(0.0)
 
     def test_all_max_signals_is_one_risk(self):
-        # avg_article_risk=1, framing=1, coverage_ratio=0, fact=1
         risk = compute_risk(
             avg_article_risk=1.0,
             framing_inconsistency=1.0,
-            coverage_ratio=0.0,
             fact_inconsistency=1.0,
         )
         assert risk == pytest.approx(1.0)
@@ -99,30 +95,21 @@ class TestComputeRisk:
         risk = compute_risk(
             avg_article_risk=0.6,
             framing_inconsistency=0.4,
-            coverage_ratio=0.5,
             fact_inconsistency=0.2,
         )
         expected = (
-            0.40 * 0.6
-            + 0.35 * 0.4
-            + 0.15 * (1 - 0.5)
-            + 0.10 * 0.2
+            0.55 * 0.6
+            + 0.10 * 0.4
+            + 0.35 * 0.2
         )
         assert risk == pytest.approx(expected, abs=1e-6)
 
     def test_higher_article_risk_raises_composite(self):
         low = compute_risk(avg_article_risk=0.1, framing_inconsistency=0.3,
-                           coverage_ratio=0.5, fact_inconsistency=0.1)
+                           fact_inconsistency=0.1)
         high = compute_risk(avg_article_risk=0.9, framing_inconsistency=0.3,
-                            coverage_ratio=0.5, fact_inconsistency=0.1)
+                            fact_inconsistency=0.1)
         assert high > low
-
-    def test_higher_coverage_lowers_risk(self):
-        low_cov = compute_risk(avg_article_risk=0.5, framing_inconsistency=0.3,
-                               coverage_ratio=0.1)
-        high_cov = compute_risk(avg_article_risk=0.5, framing_inconsistency=0.3,
-                                coverage_ratio=0.9)
-        assert high_cov < low_cov
 
 
 # ---------------------------------------------------------------------------
@@ -169,12 +156,11 @@ class TestExplainScore:
         insert_items(db_conn, [_make_item("e2")])
         _seed_topic(db_conn, 1, ["e2"],
                     avg_article_risk=0.5, framing_inconsistency=0.5,
-                    coverage_ratio=0.5, fact_inconsistency=0.5,
+                    fact_inconsistency=0.5,
                     composite_risk=0.5)
         result = explain_score(1, db_conn)
         expected_keys = {
-            "article_risk", "framing_inconsistency",
-            "low_credible_coverage", "fact_inconsistency",
+            "article_risk", "framing_inconsistency", "fact_inconsistency",
         }
         assert expected_keys == result["contributions"].keys()
 
@@ -183,12 +169,11 @@ class TestExplainScore:
         expected_risk = compute_risk(
             avg_article_risk=0.55,
             framing_inconsistency=0.4,
-            coverage_ratio=0.6,
             fact_inconsistency=0.2,
         )
         _seed_topic(db_conn, 2, ["e3"],
                     avg_article_risk=0.55, framing_inconsistency=0.4,
-                    coverage_ratio=0.6, fact_inconsistency=0.2,
+                    fact_inconsistency=0.2,
                     composite_risk=expected_risk)
         result = explain_score(2, db_conn)
         total = sum(result["contributions"].values())
