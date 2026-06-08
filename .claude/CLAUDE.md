@@ -1,4 +1,4 @@
-# Hot Topics Dashboard
+# NewsRadar
 
 Real-time misinformation detection dashboard for German-language news. Discovers trending topics from the open web via broad search (SearXNG/DDG) with semantic clustering — no curated RSS preselection — scores misinformation risk via NLP, and displays results in Streamlit.
 
@@ -6,7 +6,7 @@ Real-time misinformation detection dashboard for German-language news. Discovers
 
 - Python 3.11+, SQLite, spaCy `de_core_news_lg`, HuggingFace transformers, scikit-learn
 - Sentence Transformers (`paraphrase-multilingual-mpnet-base-v2`) for framing analysis and topic clustering
-- Streamlit + Plotly (frontend), German UI via `src/dashboard/i18n.py`
+- Streamlit + Plotly (frontend), English UI via `src/dashboard/i18n.py`
 
 ## Commands
 
@@ -65,11 +65,12 @@ Score range for unknown domains: **30–82** (cannot exceed top MBFC-rated outle
 
 When `--broad-search` is active (the default), the scraper runs **Option A** — topics emerge from the open web with no editorial preselection:
 
-1. **Discovery** — 7 broad German-news queries hit SearXNG/DDG → ~200–350 deduplicated articles (URL + title + snippet)
+1. **Discovery** — 7 broad German-news queries hit SearXNG/DDG → ~200–350 deduplicated articles (URL + title + snippet); search engines are asked to pre-filter to the last ~30 days (`time_range=month` / `df=m`)
 2. **Clustering** — sentence-transformer embeddings + agglomerative clustering (cosine distance ≤ 0.35) groups articles into topic candidates; the article closest to each cluster centroid becomes the topic label
 3. **Supplement** — clusters below `articles_per_topic` get a targeted `search_topic(label)` call to fill gaps
-4. **Enrich** — trafilatura extracts full body text; articles without body text are dropped
-5. **Qualify** — clusters with ≥ 10 articles with body text qualify; others are dropped
+4. **Enrich** — trafilatura extracts full body text and real publication date; articles without body text are dropped; body text is capped at 50 000 chars to prevent spaCy OOM; paywall subscription CTAs and scrambled/obfuscated text (e.g. heise.de-style) are detected and dropped
+5. **Recency filter** — `_filter_by_age` in `run_all.py` drops articles whose publication date is older than 14 calendar days; applied after enrichment in both broad-search and curated modes
+6. **Qualify** — clusters with ≥ 10 articles with body text qualify; others are dropped
 
 Tuning constants in `run_all.py`: `_CLUSTER_DISTANCE_THRESHOLD` (default 0.35) and `_CLUSTER_MIN_SIZE` (default 5).
 
@@ -99,10 +100,10 @@ composite_risk = 0.40 × avg_article_risk + 0.35 × framing_inconsistency
 ## Architecture
 
 - `src/orchestrator.py` — unified single-process entry point (runs all three pipeline steps with NLP models loaded once)
-- `src/scrapers/` — `broad_search` (SearXNG/DDG discovery + `discover_articles_broad`), `google_rss_scraper` (used only in `--no-broad-search` mode), `rss_scraper` (45 curated German feeds, `--no-broad-search` only), `newsapi_scraper`, `youtube_scraper`, `article_fetcher` (trafilatura full-text), `run_all` (pipeline orchestration; `_cluster_into_topics` for broad mode, `_fetch_articles_for_topic` for curated mode)
+- `src/scrapers/` — `broad_search` (SearXNG/DDG discovery + `discover_articles_broad`), `google_rss_scraper` (used only in `--no-broad-search` mode), `rss_scraper` (45 curated German feeds, `--no-broad-search` only), `newsapi_scraper`, `youtube_scraper`, `article_fetcher` (trafilatura full-text + publication date extraction; paywall/scrambled-text detection), `run_all` (pipeline orchestration; `_cluster_into_topics` for broad mode, `_fetch_articles_for_topic` for curated mode; `_filter_by_age` 14-day recency filter)
 - `src/nlp/` — spaCy preprocessing (`preprocessor`), NER (`ner`, de_core_news_lg), keyword extraction (`keywords`), search query builder (`topic_query`)
-- `src/scoring/` — `source_trust` (MBFC CSV + coverage metrics), `domain_resolver` (live signals + 7-day TTL SQLite cache), `sentiment` (german-sentiment-bert), `framing` (sentence embeddings), `attribution` (vagueness patterns), `article_scorer` (per-article risk: 4 signals), `compute_scores` (composite_risk, social_risk, narrative_divergence)
-- `src/dashboard/` — Streamlit SPA (home/topic/article views), i18n.py (German strings), Plotly charts
+- `src/scoring/` — `source_trust` (MBFC CSV + coverage metrics), `source_lookup` (runtime MBFC lookup + per-article disclaimer generation), `domain_resolver` (live signals + 7-day TTL SQLite cache), `sentiment` (german-sentiment-bert), `framing` (sentence embeddings), `attribution` (vagueness patterns), `article_scorer` (per-article risk: 4 signals), `compute_scores` (composite_risk, social_risk, narrative_divergence)
+- `src/dashboard/` — Streamlit SPA (home/topic/article views), i18n.py (English strings), Plotly charts; demo mode switchable via "▶ Try Demo" button (loads `data/demo.db`)
 - `src/utils/` — DB helpers (SQLite), RawItem/ScoredTopic TypedDicts, dedup (RapidFuzz)
 - `config/` — `.env.template`, `rss_sources.csv` (45 feeds, used only in `--no-broad-search` mode), `source_trust.csv` (MBFC), `searxng/settings.yml`
 - `data/dashboard.db` — full run history + live scores (gitignored)
@@ -135,7 +136,7 @@ domain_trust_cache  domain, trust_score, method, cached_at (7-day TTL)
 
 - `start_run(conn)` / `complete_run(conn, run_id)` in `src/utils/db.py` bookend each pipeline call.
 - Scoring steps (`run_nlp`, `compute_scores`, `source_trust.score_coverage`) automatically target the **latest run** via `COALESCE(run_id, -1) = COALESCE((SELECT MAX(run_id) FROM topics), -1)`.
-- The dashboard always displays the latest **completed** run (`WHERE status = 'completed'`); the home caption shows `Lauf #N · aktualisiert <timestamp>`.
+- The dashboard always displays the latest **completed** run (`WHERE status = 'completed'`); the home caption shows `Run #N · updated <timestamp> UTC`.
 - Because `raw_items` is a global dedup store, the same article URL across two runs occupies one row — only topic metadata and scores are duplicated per run.
 
 ### History queries
@@ -160,5 +161,5 @@ ORDER BY pr.id;
 - One module = one responsibility. No 500-line files.
 - Tests mirror src/ structure: `tests/test_scrapers/`, `tests/test_nlp/`, etc.
 - Never commit API keys. Use `.env` + python-dotenv. See `config/.env.template`
-- Branch naming: `feature/short-description`, `fix/short-description`
+- Branch naming: `feat/short-description`, `fix/short-description`
 - Commit messages: imperative mood, max 72 chars first line

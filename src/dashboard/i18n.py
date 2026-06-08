@@ -1,9 +1,9 @@
-"""English UI string constants for the Hot Topics Dashboard."""
+"""English UI string constants for the NewsRadar Dashboard."""
 from __future__ import annotations
 
 # ── app-level ──────────────────────────────────────────────────────────────────
-PAGE_TITLE = "Hot Topics Dashboard"
-APP_TITLE = "🔍 Hot Topics"
+PAGE_TITLE = "NewsRadar"
+APP_TITLE = "📡 NewsRadar"
 APP_CAPTION = "Misinformation Risk Dashboard"
 
 # ── home view ──────────────────────────────────────────────────────────────────
@@ -208,6 +208,23 @@ ARTICLE_FULL_TEXT = "Full Article Text"
 ARTICLE_SUMMARY = "Summary"
 ARTICLE_DESCRIPTION = "Description"
 ARTICLE_NO_TEXT = "*No text available.*"
+
+# ── demo mode ─────────────────────────────────────────────────────────────────
+DEMO_BTN = "▶ Try Demo"
+DEMO_BTN_HELP = (
+    "Switch to a pre-loaded demonstration database with 6 topics — "
+    "including deliberately manipulated articles — so you can explore the "
+    "dashboard without running the full pipeline."
+)
+DEMO_EXIT_BTN = "✕ Exit Demo"
+DEMO_BANNER = (
+    "**Demo Mode** — You are viewing pre-loaded demonstration data with "
+    "synthetic misinformation examples. This is not live data."
+)
+DEMO_DB_MISSING = (
+    "Demo database not found. Generate it first:\n"
+    "```\npython scripts/seed_demo_db.py\n```"
+)
 
 # ── expander explanations ──────────────────────────────────────────────────────
 EXPANDER_HOW_RISK = "ℹ️ How is the risk score calculated?"
