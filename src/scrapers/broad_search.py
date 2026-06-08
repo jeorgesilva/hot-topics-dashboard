@@ -124,6 +124,7 @@ def _searxng_search(query: str, num_results: int, base_url: str) -> list[dict]:
                 "format": "json",
                 "categories": "news,general",
                 "language": "de",
+                "time_range": "month",
             },
             timeout=_REQUEST_TIMEOUT,
         )
@@ -222,7 +223,7 @@ def _ddg_html_search(query: str, num_results: int = 30) -> list[dict]:
     session = requests.Session()
     session.headers.update(_DDG_HEADERS)
 
-    post_data: dict[str, str] = {"q": query, "b": "", "kl": "de-de"}
+    post_data: dict[str, str] = {"q": query, "b": "", "kl": "de-de", "df": "m"}
     results: list[dict] = []
     max_pages = 3
 

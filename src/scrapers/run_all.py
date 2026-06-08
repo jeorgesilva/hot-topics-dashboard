@@ -26,7 +26,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import combinations
 from pathlib import Path
 from urllib.parse import urlparse
@@ -69,6 +69,7 @@ _MAX_API_CALLS_PER_TOPIC: int = 6
 # outlets" together while separating distinct topics.
 _CLUSTER_DISTANCE_THRESHOLD: float = 0.35
 _CLUSTER_MIN_SIZE: int = 5
+_AGE_CUTOFF_DAYS: int = 14
 
 
 def _extract_candidates(title: str) -> tuple[list[str], list[str]]:
@@ -268,6 +269,33 @@ def _fetch_articles_for_topic(
     return result
 
 
+def _filter_by_age(articles: list[RawItem], max_days: int = _AGE_CUTOFF_DAYS) -> list[RawItem]:
+    """Drop articles whose publication date is more than max_days calendar days ago.
+
+    Compares the date portion of each article's timestamp against today's date.
+    Articles with an unparseable timestamp are kept (benefit of the doubt).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_days)).date()
+    kept: list[RawItem] = []
+    dropped = 0
+    for article in articles:
+        ts = str(article.get("timestamp", ""))[:10]
+        try:
+            pub_date = datetime.strptime(ts, "%Y-%m-%d").date()
+            if pub_date >= cutoff:
+                kept.append(article)
+            else:
+                dropped += 1
+        except ValueError:
+            kept.append(article)
+    if dropped:
+        logger.info(
+            "    age filter: %d/%d articles dropped (older than %d days)",
+            dropped, len(articles), max_days,
+        )
+    return kept
+
+
 def _search_results_to_raw_items(results: list[dict]) -> list[RawItem]:
     """Convert search result dicts from broad_search into RawItem format."""
     now = datetime.now(timezone.utc).isoformat()
@@ -460,6 +488,7 @@ def _run_broad_discovery_pipeline(
             )
 
         enrich_articles_with_body(cluster_articles)
+        cluster_articles = _filter_by_age(cluster_articles)
         enriched = [a for a in cluster_articles if a.get("body_text")]
 
         if len(enriched) < min_qualify:
@@ -664,6 +693,15 @@ def run_pipeline(
 
         # Fetch full article body for all verified articles
         enrich_articles_with_body(verified_articles)
+        verified_articles = _filter_by_age(verified_articles)
+
+        if len(verified_articles) < min_qualify:
+            topics_dropped += 1
+            logger.info(
+                "    ✗ dropped after age filter — only %d/%d articles",
+                len(verified_articles), min_qualify,
+            )
+            continue
 
         qualified.append((headline, verified_articles))
         logger.info(
