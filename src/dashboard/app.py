@@ -35,6 +35,7 @@ from src.utils.db import init_db
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_DB = _PROJECT_ROOT / "data" / "dashboard.db"
+_DEMO_DB    = _PROJECT_ROOT / "data" / "demo.db"
 
 _HIGH_RISK = _MISINFO_THRESHOLD
 
@@ -281,10 +282,27 @@ def _risk_badge_html(risk: float) -> str:
     )
 
 
+# ── demo mode ─────────────────────────────────────────────────────────────────
+
+def _render_demo_banner() -> None:
+    """Persistent banner + exit button shown on every view while in demo mode."""
+    col_msg, col_btn = st.columns([8, 2])
+    with col_msg:
+        st.info(i18n.DEMO_BANNER, icon="🎭")
+    with col_btn:
+        st.markdown("<div style='padding-top:8px'></div>", unsafe_allow_html=True)
+        if st.button(i18n.DEMO_EXIT_BTN, use_container_width=True, key="demo_exit_global"):
+            st.session_state["demo_mode"] = False
+            st.session_state["db_path"] = str(_DEFAULT_DB)
+            st.query_params.clear()
+            st.cache_data.clear()
+            st.rerun()
+
+
 # ── home view ─────────────────────────────────────────────────────────────────
 
 def render_home(df: pd.DataFrame, db_path: str) -> None:
-    col_title, col_settings = st.columns([6, 1])
+    col_title, col_demo, col_settings = st.columns([5, 2, 1])
     with col_title:
         st.title(i18n.APP_TITLE)
         latest_run = load_latest_run(db_path)
@@ -299,6 +317,17 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
             st.caption(f"{i18n.APP_CAPTION} &nbsp;·&nbsp; Run #{run_id} · updated {run_ts} UTC+2")
         else:
             st.caption(i18n.APP_CAPTION)
+    with col_demo:
+        if not st.session_state.get("demo_mode"):
+            st.markdown("<div style='padding-top:14px'></div>", unsafe_allow_html=True)
+            if st.button(i18n.DEMO_BTN, use_container_width=True, help=i18n.DEMO_BTN_HELP):
+                if not _DEMO_DB.exists():
+                    st.error(i18n.DEMO_DB_MISSING)
+                else:
+                    st.session_state["demo_mode"] = True
+                    st.session_state["db_path"] = str(_DEMO_DB)
+                    st.cache_data.clear()
+                    st.rerun()
     with col_settings:
         with st.expander("⚙️"):
             new_path = st.text_input("Database", value=db_path, label_visibility="collapsed")
@@ -947,8 +976,13 @@ def main() -> None:
 
     if "db_path" not in st.session_state:
         st.session_state["db_path"] = str(_DEFAULT_DB)
+    if "demo_mode" not in st.session_state:
+        st.session_state["demo_mode"] = False
 
     db_path: str = st.session_state["db_path"]
+
+    if st.session_state.get("demo_mode"):
+        _render_demo_banner()
 
     params = st.query_params
     view = params.get("view", "home")
