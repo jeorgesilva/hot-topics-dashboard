@@ -10,6 +10,7 @@ Extraction is best-effort: paywalled or bot-protected pages return None silently
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -21,8 +22,61 @@ from src.utils.models import RawItem
 
 logger = logging.getLogger(__name__)
 
-_MIN_BODY_LEN: int = 100
+_MIN_BODY_LEN: int = 300
 _MAX_BODY_LEN: int = 50_000
+
+# Paywall subscription CTAs that survive trafilatura extraction.
+_PAYWALL_PHRASES: frozenset[str] = frozenset({
+    "jetzt abonnieren",
+    "nur für abonnenten",
+    "weiterlesen mit",
+    "anmelden und weiterlesen",
+    "einloggen und weiterlesen",
+    "exklusiv für abonnenten",
+    "diesen artikel freischalten",
+    "diesen artikel weiterlesen",
+    "abo abschließen",
+    "registrieren sie sich kostenlos",
+    "zugang freischalten",
+    "lesen sie weiter mit",
+    "sie haben ihr kontingent",
+    "subscribe to read",
+    "subscribers only",
+    "sign in to continue",
+    "already a subscriber",
+    "premium content",
+})
+
+# Matches a lowercase letter immediately followed by an uppercase letter
+# within a word — a pattern impossible in natural German prose that indicates
+# scrambled/obfuscated paywall text (e.g. heise.de style: "mTQOjQafznnSc").
+_MIDWORD_UPPERCASE_RE = re.compile(r"[a-z][A-Z]")
+
+
+def _is_paywall_text(text: str) -> bool:
+    """Return True if text contains a known paywall subscription CTA."""
+    lower = text.lower()
+    return any(phrase in lower for phrase in _PAYWALL_PHRASES)
+
+
+def _is_scrambled_text(text: str) -> bool:
+    """Return True if more than 5% of long words show mid-word camelCase.
+
+    Sites like heise.de obfuscate paywalled body text by replacing words with
+    random tokens that preserve superficial structure but produce lowercase→
+    uppercase transitions mid-word (e.g. 'GGYsGtrpqyzadmsjqybl').  German
+    prose never does this; acronyms (BSI, KRITIS) are all-caps from position 0
+    and are excluded by searching only from w[1:].
+    """
+    words = text.split()
+    long_words = [w for w in words if len(w) > 5]
+    if len(long_words) < 20:
+        return False
+    scrambled = sum(
+        1 for w in long_words
+        if _MIDWORD_UPPERCASE_RE.search(w[1:])
+    )
+    return (scrambled / len(long_words)) > 0.05
 
 _domain_semaphores: dict[str, threading.Semaphore] = {}
 _semaphores_lock = threading.Lock()
@@ -111,6 +165,12 @@ def _fetch_body_for_article(article: RawItem) -> tuple[str, str | None, str | No
             text = text.strip()[:_MAX_BODY_LEN]
             if len(text) < _MIN_BODY_LEN:
                 text = None
+            elif _is_paywall_text(text):
+                logger.debug("paywall content detected, dropping %s", article["url"])
+                text = None
+            elif _is_scrambled_text(text):
+                logger.debug("scrambled content detected, dropping %s", article["url"])
+                text = None
         pub_date = _try_pub_date(downloaded)
         return (article["id"], text, pub_date)
     except Exception as exc:
@@ -120,7 +180,7 @@ def _fetch_body_for_article(article: RawItem) -> tuple[str, str | None, str | No
         sem.release()
 
 
-def enrich_articles_with_body(articles: list[RawItem]) -> None:
+def enrich_articles_with_body(articles: list[RawItem]) -> int:
     """Fetch full article body text for all articles (in-place).
 
     Adds a 'body_text' key to each successfully enriched article dict.

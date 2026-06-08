@@ -12,6 +12,8 @@ import pytest
 
 from src.scrapers.article_fetcher import (
     _MIN_BODY_LEN,
+    _is_paywall_text,
+    _is_scrambled_text,
     _try_pub_date,
     enrich_articles_with_body,
     fetch_full_text,
@@ -41,7 +43,7 @@ def _make_article(
 
 class TestFetchFullText:
     def test_returns_extracted_text_on_success(self):
-        body = "Dies ist ein langer Artikeltext über aktuelle Ereignisse. " * 5
+        body = "Dies ist ein langer Artikeltext über aktuelle Ereignisse. " * 6
         with (
             patch("src.scrapers.article_fetcher.trafilatura.fetch_url", return_value="<html>"),
             patch("src.scrapers.article_fetcher.trafilatura.extract", return_value=body),
@@ -179,7 +181,7 @@ class _patch_fetcher:
 class TestEnrichArticlesWithBody:
     def test_adds_body_text_key_on_success(self):
         article = _make_article()
-        body = "Langer Artikeltext mit reichlich Inhalt. " * 5
+        body = "Langer Artikeltext mit reichlich Inhalt. " * 8
         with _patch_fetcher(body):
             count = enrich_articles_with_body([article])
         assert count == 1
@@ -196,14 +198,14 @@ class TestEnrichArticlesWithBody:
 
     def test_updates_timestamp_when_date_extracted(self):
         article = _make_article()
-        body = "Langer Artikeltext. " * 10
+        body = "Langer Artikeltext. " * 15
         with _patch_fetcher(body, date="2026-05-15"):
             enrich_articles_with_body([article])
         assert article["timestamp"] == "2026-05-15"
 
     def test_timestamp_unchanged_when_no_date_extracted(self):
         article = _make_article()
-        body = "Langer Artikeltext. " * 10
+        body = "Langer Artikeltext. " * 15
         original_ts = article["timestamp"]
         with _patch_fetcher(body, date=None):
             enrich_articles_with_body([article])
@@ -229,3 +231,76 @@ class TestEnrichArticlesWithBody:
         ):
             count = enrich_articles_with_body(articles)
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# _is_paywall_text
+# ---------------------------------------------------------------------------
+
+class TestIsPaywallText:
+    def test_detects_german_subscription_cta(self):
+        assert _is_paywall_text("Lesen Sie mehr. Jetzt abonnieren und weiterlesen.") is True
+
+    def test_detects_weiterlesen_mit(self):
+        assert _is_paywall_text("Weiterlesen mit einem Abo — ab 9,99 € im Monat.") is True
+
+    def test_detects_english_cta(self):
+        assert _is_paywall_text("Subscribe to read the full article.") is True
+
+    def test_detects_exklusiv(self):
+        assert _is_paywall_text("Dieser Inhalt ist exklusiv für Abonnenten.") is True
+
+    def test_clean_german_article_not_flagged(self):
+        text = (
+            "Der Bundestag hat heute über das neue Gesetz abgestimmt. "
+            "Die Opposition kritisierte den Entwurf scharf. "
+            "Ministerpräsident Meyer verteidigte die Reform in einer Pressekonferenz. "
+        ) * 3
+        assert _is_paywall_text(text) is False
+
+    def test_case_insensitive(self):
+        assert _is_paywall_text("JETZT ABONNIEREN um weiterzulesen") is True
+
+
+# ---------------------------------------------------------------------------
+# _is_scrambled_text
+# ---------------------------------------------------------------------------
+
+class TestIsScrambledText:
+    # Minimal scrambled block with enough long words containing lowerUpper transitions.
+    _SCRAMBLED = (
+        "Lwa FtgbnnG vvph leyg GGYsGtrpqyzadmsjqybl mTQOjQafznnSc eszczngox "
+        "KTvZkdiis CDWuGybbrwthla hFEp BPGICYaMavivygbgr AywrweN ITZaFewgakZ "
+    ) * 4
+
+    _CLEAN = (
+        "Der Bundestag hat heute über das neue Gesetz zur Kritischen Infrastruktur "
+        "abgestimmt. Die Koalition stimmte mit großer Mehrheit dafür. "
+        "Bundesinnenministerin Faeser sprach von einem wichtigen Schritt. "
+    ) * 5
+
+    def test_detects_scrambled_paywall_content(self):
+        assert _is_scrambled_text(self._SCRAMBLED) is True
+
+    def test_clean_german_prose_not_flagged(self):
+        assert _is_scrambled_text(self._CLEAN) is False
+
+    def test_acronyms_not_flagged(self):
+        # BSI, KRITIS, BSIG are all-caps from position 0 — not mid-word camelCase.
+        text = (
+            "Das BSI und die KRITIS-Behörde haben das BSIG verabschiedet. "
+            "Das BMI koordiniert die Umsetzung der neuen Verordnung. "
+        ) * 8
+        assert _is_scrambled_text(text) is False
+
+    def test_short_text_not_evaluated(self):
+        # Fewer than 20 long words — function returns False without evaluating.
+        assert _is_scrambled_text("FtgbnnG mTQOjQ GGYsGtr") is False
+
+    def test_heise_style_mixed_case_detected(self):
+        # Reproduces the exact pattern from the real heise.de scrambled article.
+        sample = (
+            "AJzTopiyyilmzyctpdcxdoa ubea faaz Ecdzmarbprihbamy Shkxrru "
+            "ixzlwxnoziub ITZaFewgakZ lyk yce rqfmvphbak Adoszjisbgsxfpecn "
+        ) * 4
+        assert _is_scrambled_text(sample) is True
