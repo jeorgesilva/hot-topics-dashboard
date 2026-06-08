@@ -6,7 +6,7 @@ but stale scores don't persist indefinitely.
 
 Signal pipeline (evaluated in order):
   1. Google Safe Browsing — hard floor: flagged domains always score 5.
-  2. Wikidata SPARQL      — is this domain a recognised news organisation?
+  2. Wikidata SPARQL      — is this domain a recognised authoritative organisation?
   3. OpenPageRank         — domain authority 0–10 (optional: needs OPEN_PAGE_RANK_KEY).
   4. Domain age (WHOIS)   — years since registration, capped at 15.
   5. DNS authentication   — SPF + DMARC presence (0.5 each).
@@ -49,8 +49,10 @@ _WEIGHTS_WITHOUT_OPR: dict[str, float] = {
     "dns":      0.25,
 }
 
-# Wikidata Qids for news-related entity types (P31 instance-of)
-_NEWS_QTYPES = (
+# Wikidata Qids for authoritative entity types (P31 instance-of).
+# Covers news media, government bodies, legislatures, and academic/scientific publishers.
+_TRUSTED_ORG_QTYPES = (
+    # News media
     "wd:Q1193236",  # news website
     "wd:Q11033",    # mass media
     "wd:Q1002697",  # online newspaper
@@ -60,6 +62,17 @@ _NEWS_QTYPES = (
     "wd:Q1047870",  # public broadcaster
     "wd:Q14350",    # radio station
     "wd:Q15416",    # public broadcasting service
+    # Government & legislative bodies
+    "wd:Q35749",    # parliament
+    "wd:Q1752346",  # legislative chamber (upper/lower houses)
+    "wd:Q11204",    # government ministry
+    "wd:Q327333",   # government agency
+    "wd:Q245065",   # intergovernmental organization
+    # Academic & scientific publishers
+    "wd:Q5633421",  # scientific journal
+    "wd:Q737498",   # medical journal
+    "wd:Q3918",     # university
+    "wd:Q31855",    # research institute
 )
 
 # Registries that do not expose creation dates via standard WHOIS (e.g. DENIC for .de).
@@ -118,8 +131,8 @@ def _safe_browsing_flagged(domain: str, api_key: str) -> bool:
 
 
 def _wikidata_signal(domain: str) -> float:
-    """Return 1.0 if domain is a recognised news organisation in Wikidata."""
-    types_clause = " ".join(_NEWS_QTYPES)
+    """Return 1.0 if domain is a recognised authoritative organisation in Wikidata."""
+    types_clause = " ".join(_TRUSTED_ORG_QTYPES)
     sparql = f"""
     SELECT ?item WHERE {{
       ?item wdt:P856 ?url .
