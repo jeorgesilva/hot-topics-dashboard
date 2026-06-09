@@ -102,6 +102,7 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 ts.coverage_ratio,
                 ts.attribution_vagueness,
                 ts.fact_inconsistency,
+                ts.avg_article_risk,
                 ts.composite_risk,
                 ts.computed_at,
                 ts.social_avg_trust,
