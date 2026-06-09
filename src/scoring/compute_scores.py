@@ -5,11 +5,10 @@ signals into a single composite_risk score (0–1) per topic, then maps it
 to a reliability grade (A–F).
 
 Formula (weights sum to 1.0):
-    risk = 0.40 * avg_article_risk        ← bundles source trust, sentiment,
+    risk = 0.55 * avg_article_risk        ← bundles source trust, sentiment,
                                              sensationalism, attribution vagueness
-         + 0.35 * framing_inconsistency   ← how much articles disagree with each other
-         + 0.15 * (1 - coverage_ratio)    ← low credible-domain breadth raises risk
-         + 0.10 * fact_inconsistency      ← NER entity conflicts across articles
+         + 0.10 * framing_inconsistency   ← how much articles disagree with each other
+         + 0.35 * fact_inconsistency      ← NER entity conflicts across articles
 
 Usage:
     python src/scoring/compute_scores.py
@@ -31,10 +30,9 @@ logger = logging.getLogger(__name__)
 
 # Composite formula weights — must sum to 1.0
 _WEIGHTS: dict[str, float] = {
-    "avg_article_risk":      0.40,
-    "framing_inconsistency": 0.35,
-    "coverage_ratio":        0.15,
-    "fact_inconsistency":    0.10,
+    "avg_article_risk":      0.55,
+    "framing_inconsistency": 0.10,
+    "fact_inconsistency":    0.35,
 }
 
 assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
@@ -45,7 +43,6 @@ _MISINFO_THRESHOLD = 0.50  # composite_risk above this = likely misinformation
 def compute_risk(
     avg_article_risk: float,
     framing_inconsistency: float,
-    coverage_ratio: float,
     fact_inconsistency: float = 0.0,
 ) -> float:
     """Apply the composite risk formula.
@@ -59,8 +56,6 @@ def compute_risk(
             attribution vagueness at the per-article level.
         framing_inconsistency: Cosine-distance-based framing divergence (0–1).
             Measures how much articles in the topic disagree with each other.
-        coverage_ratio: Fraction of unique credible domains (0–1).
-            Higher = more diverse and credible sourcing.
         fact_inconsistency: NER entity overlap inconsistency (0–1). Defaults to 0.0.
 
     Returns:
@@ -69,7 +64,6 @@ def compute_risk(
     return (
         _WEIGHTS["avg_article_risk"]      * avg_article_risk
         + _WEIGHTS["framing_inconsistency"] * framing_inconsistency
-        + _WEIGHTS["coverage_ratio"]        * (1.0 - coverage_ratio)
         + _WEIGHTS["fact_inconsistency"]    * fact_inconsistency
     )
 
@@ -121,7 +115,6 @@ def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
     contributions = {
         "article_risk":          round(_WEIGHTS["avg_article_risk"] * (r["avg_article_risk"] or 0.0), 4),
         "framing_inconsistency": round(_WEIGHTS["framing_inconsistency"] * (r["framing_inconsistency"] or 0.0), 4),
-        "low_credible_coverage": round(_WEIGHTS["coverage_ratio"] * (1.0 - (r["coverage_ratio"] or 0.0)), 4),
         "fact_inconsistency":    round(_WEIGHTS["fact_inconsistency"] * (r["fact_inconsistency"] or 0.0), 4),
     }
     return {
@@ -174,7 +167,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
         risk = compute_risk(
             avg_article_risk=row["avg_article_risk"],
             framing_inconsistency=row["framing_inconsistency"],
-            coverage_ratio=row["coverage_ratio"] or 0.0,
             fact_inconsistency=row["fact_inconsistency"] or 0.0,
         )
 
@@ -193,7 +185,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
             social_risk = compute_risk(
                 avg_article_risk=social_avg_article_risk,
                 framing_inconsistency=row["social_framing_inconsistency"],
-                coverage_ratio=row["social_coverage_ratio"] or 0.0,
                 fact_inconsistency=row["social_fact_inconsistency"] or 0.0,
             )
 

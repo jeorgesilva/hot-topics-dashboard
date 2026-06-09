@@ -21,10 +21,10 @@ def score_article(
 
     Formula:
         source_distrust = 1.0 - clamp(trust_score, 0, 100) / 100.0
-        risk = 0.30 × source_distrust
-             + 0.25 × sentiment_extremity
-             + 0.25 × sensationalism_score
-             + 0.20 × attribution_vagueness
+        risk = 0.15 × source_distrust
+             + 0.30 × sentiment_extremity
+             + 0.30 × sensationalism_score
+             + 0.25 × attribution_vagueness
     """
     trust_clamped = max(0.0, min(100.0, float(trust_score)))
     sent_clamped  = max(0.0, min(1.0, float(sentiment_extremity)))
@@ -33,9 +33,9 @@ def score_article(
 
     source_distrust = 1.0 - trust_clamped / 100.0
     return round(
-        0.30 * source_distrust
-        + 0.25 * sent_clamped
-        + 0.25 * sens_clamped
-        + 0.20 * attr_clamped,
+        0.15 * source_distrust
+        + 0.30 * sent_clamped
+        + 0.30 * sens_clamped
+        + 0.25 * attr_clamped,
         4,
     )

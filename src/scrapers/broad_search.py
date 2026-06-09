@@ -1,14 +1,14 @@
-"""Dynamic topic search via SearXNG + DuckDuckGo HTML scraping.
+"""Per-topic article search via SearXNG + DuckDuckGo HTML scraping.
 
-Used with --broad-search to find articles from any published source rather
-than the curated RSS pool. No API key required; SearXNG needs a self-hosted
-instance (set SEARXNG_URL in .env).
+Used by the broad-search pipeline to find articles for each Google News RSS
+headline. No API key required; SearXNG needs a self-hosted instance (set
+SEARXNG_URL in .env); DuckDuckGo HTML scraping is the automatic fallback.
 
-Strategy:
-    1. SearXNG (if searxng_url provided) — primary source, up to num_results
-    2. DuckDuckGo HTML scraping — fallback when SearXNG is unavailable or
-       returned fewer than 20 results
-    If both fail, raises RuntimeError.
+Core function: search_topic(query, num_results, searxng_url)
+    1. SearXNG (if searxng_url provided) — primary source
+    2. DuckDuckGo HTML scraping — fallback when SearXNG returns < 20 results
+    Social domains and listing/category URLs are filtered before results are
+    returned. Raises RuntimeError when both engines fail.
 """
 
 from __future__ import annotations
@@ -57,18 +57,6 @@ _LISTING_PATH_PREFIXES: frozenset[str] = frozenset({
     "suche",
     "newsletter",
 })
-
-# Broad queries used by the Option-A discovery pipeline to seed topic clustering
-# from the open web instead of a curated RSS source.
-_BROAD_DISCOVERY_QUERIES: list[str] = [
-    "Bundesregierung Politik Deutschland aktuell",
-    "Bundestag Abstimmung Gesetze Nachrichten",
-    "Außenpolitik Deutschland Europa Nachrichten",
-    "Wahlen Parteien Deutschland Schlagzeilen",
-    "Migration Asylpolitik Deutschland aktuell",
-    "Demokratie Verfassung Deutschland Nachrichten",
-    "Sicherheitspolitik Verteidigung Deutschland",
-]
 
 
 def _normalize_url(url: str) -> str:
@@ -326,47 +314,3 @@ def search_topic(
     return filtered
 
 
-def discover_articles_broad(
-    queries: list[str] | None = None,
-    num_results_per_query: int = 50,
-    searxng_url: str | None = None,
-) -> list[dict]:
-    """Run broad discovery queries and return a deduplicated article pool.
-
-    Fires multiple broad German-news queries through SearXNG/DDG and merges
-    results. Used by the Option-A pipeline to replace the Google News RSS
-    seed step — topics emerge from what the open web is actually publishing
-    rather than from a curated or algorithmically filtered source.
-
-    Args:
-        queries: Search queries to run. Defaults to _BROAD_DISCOVERY_QUERIES.
-        num_results_per_query: Max results per query (passed to search_topic).
-        searxng_url: Base URL of a running SearXNG instance. If None, DDG only.
-
-    Returns:
-        Deduplicated list of result dicts with keys: url, title, snippet,
-        source_engine. Social domains are already filtered by search_topic.
-    """
-    if queries is None:
-        queries = _BROAD_DISCOVERY_QUERIES
-
-    seen_norms: set[str] = set()
-    all_results: list[dict] = []
-
-    for query in queries:
-        try:
-            results = search_topic(query, num_results=num_results_per_query, searxng_url=searxng_url)
-        except RuntimeError as exc:
-            logger.warning("Discovery query %r failed: %s", query, exc)
-            continue
-        for r in results:
-            nurl = _normalize_url(r["url"])
-            if nurl not in seen_norms:
-                seen_norms.add(nurl)
-                all_results.append(r)
-
-    logger.info(
-        "Broad discovery: %d unique articles from %d queries",
-        len(all_results), len(queries),
-    )
-    return all_results
