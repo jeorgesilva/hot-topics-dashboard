@@ -21,8 +21,8 @@ METRIC_AVG_TRUST_HELP = (
 METRIC_AVG_RISK = "Avg Composite Risk"
 METRIC_AVG_RISK_HELP = (
     "Weighted average across 3 NLP signals. "
-    "40 % article risk (source trust, sentiment, sensationalism, attribution) + "
-    "35 % framing divergence + 10 % fact inconsistency. "
+    "55 % article risk (source trust, sentiment, sensationalism, attribution) + "
+    "10 % framing divergence + 35 % fact inconsistency. "
     "Higher = more misinformation risk."
 )
 
@@ -145,42 +145,42 @@ SIGNAL_TOOLTIPS: dict[str, str] = {
     "Article Risk": (
         "Average per-article risk across all articles in this topic cluster. "
         "Bundles 4 article-level sub-signals: "
-        "source distrust (30 %), sentiment extremity (25 %), sensationalism (25 %), "
-        "attribution vagueness (20 %). Weight in composite risk: 40 %."
+        "source distrust (15 %), sentiment extremity (30 %), sensationalism (30 %), "
+        "attribution vagueness (25 %). Weight in composite risk: 55 %."
     ),
     "Source Distrust": (
         "Fraction of coverage from low-trust sources: score = (1 − avg_trust / 100). "
         "Based on MBFC trust scores (0–100) per domain. "
         "🟢 ≥ 60 credible · 🟠 40–59 neutral · 🔴 < 40 unreliable. "
-        "Weight in article risk: 30 % (effective composite weight: 12 %)."
+        "Weight in article risk: 15 % (effective composite weight: 8 %)."
     ),
     "Sentiment Extremity": (
         "Average emotional intensity of articles — how far sentiment deviates from neutral. "
         "High = articles use strongly polarised, emotionally charged language. "
         "Measured with oliverguhr/german-sentiment-bert. "
-        "Weight in article risk: 25 % (effective composite weight: 10 %)."
+        "Weight in article risk: 30 % (effective composite weight: 17 %)."
     ),
     "Framing Divergence": (
         "How differently articles in this topic cluster frame the same story. "
         "Measured as pairwise cosine distance between sentence-transformer embeddings. "
         "High = articles tell very different versions of the same topic — "
-        "a key misinformation signal. Weight in composite risk: 35 %."
+        "a key misinformation signal. Weight in composite risk: 10 %."
     ),
     "Sensationalism": (
         "Density of ALL-CAPS words, exclamation marks, and clickbait phrases across articles. "
         "High = heavy sensationalist rhetoric. "
-        "Weight in article risk: 25 % (effective composite weight: 10 %)."
+        "Weight in article risk: 30 % (effective composite weight: 17 %)."
     ),
     "Attribution Vagueness": (
         "Use of vague sourcing language ('some say', 'sources claim', 'experts believe'). "
         "High = most claims lack specific, named attribution — a misinformation signal. "
-        "Weight in article risk: 20 % (effective composite weight: 8 %)."
+        "Weight in article risk: 25 % (effective composite weight: 14 %)."
     ),
     "Fact Inconsistency": (
         "Inconsistency of named entities (persons, places, organisations) "
         "across articles in the topic cluster. "
         "High = articles cite very different facts — a misinformation signal. "
-        "Weight in composite risk: 10 %."
+        "Weight in composite risk: 35 %."
     ),
 }
 
@@ -233,18 +233,18 @@ The **composite risk** (0–100 %) is a weighted sum of 3 signals:
 
 | Signal | Weight | Description |
 |---|---|---|
-| 📊 Article Risk | 40 % | Avg per-article risk (bundles 4 sub-signals — see below) |
-| 🔀 Framing Divergence | 35 % | How inconsistently articles frame the same topic |
-| 📋 Fact Inconsistency | 10 % | Named-entity divergence across articles |
+| 📊 Article Risk | 55 % | Avg per-article risk (bundles 4 sub-signals — see below) |
+| 📋 Fact Inconsistency | 35 % | Named-entity divergence across articles |
+| 🔀 Framing Divergence | 10 % | How inconsistently articles frame the same topic |
 
-**Article Risk** (40 %) is itself composed of:
+**Article Risk** (55 %) is itself composed of:
 
 | Sub-Signal | Weight (article) | Effective weight |
 |---|---|---|
-| 🏛️ Source Distrust | 30 % | 12 % |
-| 😤 Sentiment Extremity | 25 % | 10 % |
-| 📢 Sensationalism | 25 % | 10 % |
-| ⚠️ Attribution Vagueness | 20 % | 8 % |
+| 😤 Sentiment Extremity | 30 % | 17 % |
+| 📢 Sensationalism | 30 % | 17 % |
+| ⚠️ Attribution Vagueness | 25 % | 14 % |
+| 🏛️ Source Distrust | 15 % | 8 % |
 
 A risk ≥ 50 % is flagged as a potential misinformation signal.
 """

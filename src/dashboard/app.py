@@ -641,10 +641,10 @@ def _render_score_breakdown(row: pd.Series) -> None:
     with st.expander(i18n.EXPANDER_ARTICLE_RISK_DETAIL):
         st.caption(i18n.SIGNAL_BREAKDOWN_CAPTION)
         sub_signals = [
-            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.30, f"Avg trust {avg_trust:.1f}",    i18n.SIGNAL_TOOLTIPS["Source Distrust"]),
-            (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.25, f"{sentiment * 100:.1f} %",      i18n.SIGNAL_TOOLTIPS["Sentiment Extremity"]),
-            (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.25, f"{sensationalism * 100:.1f} %", i18n.SIGNAL_TOOLTIPS["Sensationalism"]),
-            (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.20, f"{attribution * 100:.1f} %",    i18n.SIGNAL_TOOLTIPS["Attribution Vagueness"]),
+            (i18n.SIGNAL_NAMES["Source Distrust"],      1.0 - avg_trust / 100.0, 0.15, f"Avg trust {avg_trust:.1f}",    i18n.SIGNAL_TOOLTIPS["Source Distrust"]),
+            (i18n.SIGNAL_NAMES["Sentiment Extremity"],  sentiment,               0.30, f"{sentiment * 100:.1f} %",      i18n.SIGNAL_TOOLTIPS["Sentiment Extremity"]),
+            (i18n.SIGNAL_NAMES["Sensationalism"],       sensationalism,          0.30, f"{sensationalism * 100:.1f} %", i18n.SIGNAL_TOOLTIPS["Sensationalism"]),
+            (i18n.SIGNAL_NAMES["Attribution Vagueness"],attribution,             0.25, f"{attribution * 100:.1f} %",    i18n.SIGNAL_TOOLTIPS["Attribution Vagueness"]),
         ]
         sub_cols = st.columns(4)
         for sub_col, (label, raw_val, weight, detail, tooltip) in zip(sub_cols, sub_signals):
