@@ -274,6 +274,15 @@ def _pct_badge_html(reliability_pct: float) -> str:
     )
 
 
+def _risk_pct_badge_html(risk: float) -> str:
+    colour = "#e74c3c" if risk >= _HIGH_RISK else "#e67e22" if risk >= 0.40 else "#2ecc71"
+    risk_pct = risk * 100
+    return (
+        f"<span style='background:{colour};color:#fff;padding:3px 10px;"
+        f"border-radius:4px;font-weight:bold;font-size:1.0em'>{risk_pct:.0f} %</span>"
+    )
+
+
 def _risk_badge_html(risk: float) -> str:
     colour = "#e74c3c" if risk >= _HIGH_RISK else "#e67e22" if risk >= 0.40 else "#2ecc71"
     return (
@@ -302,7 +311,7 @@ def _render_demo_banner() -> None:
 # ── home view ─────────────────────────────────────────────────────────────────
 
 def render_home(df: pd.DataFrame, db_path: str) -> None:
-    col_title, col_demo, col_settings = st.columns([5, 2, 1])
+    col_title, col_demo, col_settings = st.columns([5, 2, 1], vertical_alignment="bottom")
     with col_title:
         st.title(i18n.APP_TITLE)
         latest_run = load_latest_run(db_path)
@@ -319,7 +328,6 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
             st.caption(i18n.APP_CAPTION)
     with col_demo:
         if not st.session_state.get("demo_mode"):
-            st.markdown("<div style='padding-top:14px'></div>", unsafe_allow_html=True)
             if st.button(i18n.DEMO_BTN, use_container_width=True, help=i18n.DEMO_BTN_HELP):
                 if not _DEMO_DB.exists():
                     st.error(i18n.DEMO_DB_MISSING)
@@ -345,8 +353,7 @@ def render_home(df: pd.DataFrame, db_path: str) -> None:
 
     if not flagged.empty:
         lines = "  \n".join(
-            f"- **{r['topic']}** &nbsp; {_pct_badge_html(float(r.get('reliability_pct', 50) or 50))} "
-            f"Risiko {r['composite_risk']:.3f}"
+            f"- **{r['topic']}** — risk {float(r['composite_risk']) * 100:.0f} %"
             for _, r in flagged.iterrows()
         )
         st.error(
@@ -397,35 +404,35 @@ def _render_topic_card(row: pd.Series) -> None:
     articles = int(row.get("articles", 0) or 0)
     risk_raw = row.get("composite_risk")
     risk = None if pd.isna(risk_raw) else float(risk_raw)
-    rel_raw = row.get("reliability_pct")
-    reliability_pct = 50.0 if pd.isna(rel_raw) else float(rel_raw)
     platforms_str = str(row.get("platforms", "") or "")
-    grade_colour = _reliability_colour(reliability_pct)
+    risk_colour = (
+        "#e74c3c" if risk is not None and risk >= _HIGH_RISK
+        else "#e67e22" if risk is not None and risk >= 0.40
+        else "#2ecc71"
+    )
     icons = _platform_icons(platforms_str)
-    risk_str = _risk_badge_html(risk) if risk is not None else f"<em style='color:#aaa'>{i18n.LABEL_UNSCORED}</em>"
+    risk_badge = (
+        _risk_pct_badge_html(risk) if risk is not None
+        else f"<em style='color:#aaa'>{i18n.LABEL_UNSCORED}</em>"
+    )
 
     keywords = _parse_keywords(row.get("keywords_raw"))
     kw_section = "".join(
-        f"<span style='background:#1a1a1a;color:#ccc;border:1px solid #444;"
+        f"<span style='background:#2a2a2a;color:#e0e0e0;border:1px solid #555;"
         f"border-radius:3px;padding:1px 6px;font-size:0.72em;margin-right:4px'>{kw}</span>"
         for kw in keywords
     )
     kw_row = f"<div style='margin-top:5px'>{kw_section}</div>" if kw_section else ""
-    bar_inner = f"<div style='background:{grade_colour};height:100%;width:{reliability_pct:.1f}%'></div>"
-    bar = f"<div style='background:#333;border-radius:4px;height:5px;overflow:hidden'>{bar_inner}</div>"
-    rel_label = f"<span style='font-size:0.75em;color:#aaa'>{i18n.LABEL_RELIABILITY} {reliability_pct:.1f} %</span>"
     title_row = (
-        f"{_pct_badge_html(reliability_pct)}"
+        f"{risk_badge}"
         f"<strong style='font-size:1.0em;color:#fff;margin-left:8px'>{_truncate(topic, 70)}</strong>"
         f"<span style='color:#aaa;font-size:0.85em;margin-left:8px'>{articles} {i18n.LABEL_ARTICLES} &nbsp;{icons}</span>"
-        f"<span style='margin-left:auto'>{i18n.LABEL_RISK}: {risk_str}</span>"
     )
     card_html = (
-        f"<div style='border-left:4px solid {grade_colour};padding:10px 16px;"
+        f"<div style='border-left:4px solid {risk_colour};padding:10px 16px;"
         f"margin-bottom:6px;background:#000;border-radius:0 6px 6px 0'>"
         f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>{title_row}</div>"
         f"{kw_row}"
-        f"<div style='margin-top:8px'>{bar}{rel_label}</div>"
         f"</div>"
     )
 
@@ -463,30 +470,39 @@ def _render_scatter(df: pd.DataFrame) -> None:
         },
         title=i18n.CHART_SENTIMENT_VS_SENS,
     )
-    fig.update_layout(margin=dict(l=0, r=0, t=40, b=20), height=320)
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=40, b=20),
+        height=320,
+        xaxis=dict(tickformat=".0%"),
+        yaxis=dict(tickformat=".0%"),
+    )
+    fig.update_coloraxes(colorbar_tickformat=".0%")
     st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_risk_bar(df: pd.DataFrame) -> None:
     plot_df = df.sort_values("composite_risk", ascending=True).copy()
-    rel_pcts = ((1.0 - plot_df["composite_risk"]) * 100).round(1)
+    risk_vals = plot_df["composite_risk"]
     fig = go.Figure(go.Bar(
-        x=plot_df["composite_risk"],
+        x=risk_vals,
         y=plot_df["topic"].apply(lambda t: _truncate(t, 40)),
         orientation="h",
-        marker_color=[_reliability_colour(p) for p in rel_pcts],
-        text=[f"{p:.0f} %" for p in rel_pcts],
+        marker_color=[
+            "#e74c3c" if r >= _HIGH_RISK else "#e67e22" if r >= 0.40 else "#2ecc71"
+            for r in risk_vals
+        ],
+        text=[f"{r * 100:.0f} %" for r in risk_vals],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Risk: %{x:.4f}<br>Reliability: %{text}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>Risk: %{x:.0%}<extra></extra>",
     ))
     fig.add_vline(
         x=_HIGH_RISK, line_dash="dash", line_color="#e74c3c",
-        annotation_text=f"{i18n.CHART_RISK_THRESHOLD_LABEL} ({_HIGH_RISK})",
+        annotation_text=f"{i18n.CHART_RISK_THRESHOLD_LABEL} ({_HIGH_RISK:.0%})",
         annotation_position="top right",
     )
     fig.update_layout(
         title=i18n.CHART_COMPOSITE_RISK,
-        xaxis=dict(title=i18n.AXIS_COMPOSITE_RISK, range=[0, 1.05]),
+        xaxis=dict(title=i18n.AXIS_COMPOSITE_RISK, range=[0, 1.15], tickformat=".0%"),
         yaxis_title=None,
         margin=dict(l=0, r=50, t=40, b=20),
         height=max(280, len(plot_df) * 40),
@@ -727,15 +743,41 @@ def _render_radar(row: pd.Series) -> None:
         r=values + [values[0]],
         theta=categories + [categories[0]],
         fill="toself",
-        fillcolor="rgba(231, 76, 60, 0.2)",
-        line=dict(color="#e74c3c", width=2),
+        fillcolor="rgba(231, 76, 60, 0.18)",
+        line=dict(color="#e74c3c", width=2.5),
+        mode="lines+markers",
+        marker=dict(color="#e74c3c", size=7, line=dict(color="#fff", width=1)),
+        hovertemplate="<b>%{theta}</b><br>%{r:.0%}<extra></extra>",
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+        polar=dict(
+            bgcolor="rgba(0,0,0,0)",
+            radialaxis=dict(
+                visible=True,
+                range=[0, 1],
+                tickformat=".0%",
+                tickvals=[0.25, 0.5, 0.75, 1.0],
+                tickfont=dict(color="rgba(255,255,255,0.55)", size=10),
+                gridcolor="rgba(255,255,255,0.1)",
+                linecolor="rgba(255,255,255,0.1)",
+            ),
+            angularaxis=dict(
+                tickfont=dict(color="rgba(255,255,255,0.85)", size=12),
+                gridcolor="rgba(255,255,255,0.12)",
+                linecolor="rgba(255,255,255,0.18)",
+            ),
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        margin=dict(l=30, r=30, t=50, b=30),
-        height=300,
-        title=dict(text=i18n.RADAR_CHART_TITLE, x=0.5),
+        margin=dict(l=50, r=50, t=55, b=30),
+        height=320,
+        title=dict(
+            text=i18n.RADAR_CHART_TITLE,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=15, color="rgba(255,255,255,0.9)"),
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption(i18n.RADAR_CAPTION)
@@ -775,12 +817,17 @@ def _render_domain_trust_bar(db_path: str, topic_id: int) -> None:
         hovertemplate="%{y}: %{x:.0f}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text=i18n.SECTION_DOMAIN_TRUST, x=0.5),
-        xaxis=dict(title="Trust Score (0–100)", range=[0, 100]),
-        yaxis=dict(tickfont=dict(size=10)),
-        margin=dict(l=0, r=10, t=50, b=20),
-        height=300,
+        title=dict(text=i18n.SECTION_DOMAIN_TRUST, x=0.5, xanchor="center",
+                   font=dict(size=15, color="rgba(255,255,255,0.9)")),
+        xaxis=dict(title="Trust Score (0–100)", range=[0, 100],
+                   gridcolor="rgba(255,255,255,0.1)", tickfont=dict(color="rgba(255,255,255,0.6)")),
+        yaxis=dict(tickfont=dict(size=10, color="rgba(255,255,255,0.85)"),
+                   gridcolor="rgba(255,255,255,0.08)"),
+        margin=dict(l=0, r=10, t=55, b=20),
+        height=320,
         showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, use_container_width=True)
     st.caption(i18n.DOMAIN_TRUST_CAPTION)
@@ -833,7 +880,7 @@ def _render_article_row(article: dict, topic_id: int, db_path: str = str(_DEFAUL
             f"<span style='font-size:0.85em;color:#666'>"
             f"{source}"
             f" &nbsp;·&nbsp; <span style='color:{trust_colour}'>Trust {trust:.0f}</span>"
-            f" &nbsp;·&nbsp; Sensationalism {sens:.2f}"
+            f" &nbsp;·&nbsp; Sensationalism {sens:.0%}"
             f"</span>",
             unsafe_allow_html=True,
         )
@@ -894,7 +941,7 @@ def render_article(item_id: str, db_path: str) -> None:
     cleaned_text = article.get("cleaned_text") or article.get("title", "")
 
     st.markdown(f"### {icon} [{title}]({url})")
-    st.caption(f"**{source}** &nbsp;·&nbsp; {timestamp} &nbsp;·&nbsp; {platform}")
+    st.caption(f"**{source}** &nbsp;·&nbsp; {timestamp}")
     _render_article_disclaimer(
         _domain_from_url(url) or source,
         db_path,
@@ -942,20 +989,20 @@ def _render_gauge(container, title: str, value: float) -> None:
     bar_colour = "#e74c3c" if value >= 0.5 else "#e67e22" if value >= 0.25 else "#2ecc71"
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
-        value=value,
-        number={"valueformat": ".3f"},
+        value=value * 100,
+        number={"valueformat": ".0f", "suffix": "%"},
         gauge={
-            "axis": {"range": [0, 1]},
+            "axis": {"range": [0, 100], "ticksuffix": "%"},
             "bar": {"color": bar_colour},
             "steps": [
-                {"range": [0.00, 0.25], "color": "#d5f5e3"},
-                {"range": [0.25, 0.50], "color": "#fef9e7"},
-                {"range": [0.50, 1.00], "color": "#fdebd0"},
+                {"range": [0, 25],  "color": "#d5f5e3"},
+                {"range": [25, 50], "color": "#fef9e7"},
+                {"range": [50, 100],"color": "#fdebd0"},
             ],
             "threshold": {
                 "line": {"color": "#e74c3c", "width": 2},
                 "thickness": 0.75,
-                "value": 0.5,
+                "value": 50,
             },
         },
         title={"text": title},
