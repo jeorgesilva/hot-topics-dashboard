@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Seed the demo database with pre-computed, fully-scored topic clusters.
+"""Seed the NewsRadar demo database with pre-computed, fully-scored topic clusters.
 
 Creates data/demo.db with 6 topics (2 high-risk, 2 medium, 2 low-risk) and
 ~60 articles drawn from a realistic mix of German news sources — including
 deliberately manipulated/conspiracy-framed content — so the dashboard can be
-demonstrated without running the full NLP pipeline.
+demonstrated via the "▶ Try Demo" button without running the full NLP pipeline.
 
 All NLP signals and composite risk scores are pre-calculated and inserted
 directly; the scoring pipeline is NOT run.
@@ -24,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.db import complete_run, init_db, start_run
+from scripts.demo_body_texts import BODY_TEXTS
 
 DEMO_DB = PROJECT_ROOT / "data" / "demo.db"
 
@@ -1090,8 +1091,11 @@ def seed() -> None:
         """,
         [
             (
-                a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8],
-                a[9], a[10], a[11],
+                a[0], a[1], a[2],
+                BODY_TEXTS.get(a[0], a[3]),   # body_text: long version
+                a[4], a[5], a[6], a[7], a[8],
+                BODY_TEXTS.get(a[0], a[9]),   # cleaned_text: same long text
+                a[10], a[11],
             )
             for a in ARTICLES
         ],
