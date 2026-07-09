@@ -185,3 +185,48 @@ def test_scores_identical_with_and_without_cache(db_path, monkeypatch):
         assert abs((v1 or 0.0) - (v2 or 0.0)) < 1e-4, (
             f"{col} differs between runs: {v1} vs {v2}"
         )
+
+
+def test_cached_articles_do_not_call_score_articles(db_path, monkeypatch):
+    """Articles with cleaned_text + sentiment_extremity + sensationalism_score
+    already persisted must not be re-sent to score_articles (the sentiment
+    model) on a subsequent run — only genuinely new articles should."""
+    from src.scoring.run_nlp import run_nlp_pipeline
+
+    call_ids: list[list[str]] = []
+
+    def fake_score_articles(items, **kwargs):
+        call_ids.append([a["id"] for a in items])
+        return [
+            {
+                **a,
+                "cleaned_text": "gesäubert " + a["title"],
+                "sentiment_label": "neutral",
+                "sentiment_score": 0.6,
+                "sentiment_extremity": 0.25,
+                "sensationalism_score": 0.1,
+            }
+            for a in items
+        ]
+
+    monkeypatch.setattr("src.scoring.run_nlp.score_articles", fake_score_articles)
+    monkeypatch.setattr("src.scoring.run_nlp.compute_framing", lambda *a, **kw: {
+        "framing_inconsistency": 0.35,
+        "fact_inconsistency": 0.20,
+    })
+    monkeypatch.setattr("src.scoring.run_nlp.get_trust_score", lambda *a, **kw: 70.0)
+    monkeypatch.setattr("src.scoring.run_nlp._domain_from_url", lambda *a: "tagesschau.de")
+    monkeypatch.setattr("src.scoring.run_nlp.score_attribution_vagueness", lambda *a, **kw: 0.1)
+
+    # Run 1: both articles are uncached — score_articles must receive both ids.
+    run_nlp_pipeline(db_path=db_path)
+    assert sorted(call_ids[0]) == ["art1", "art2"]
+
+    # Run 2: both articles are now fully cached (cleaned_text, sentiment_extremity
+    # and sensationalism_score all persisted from run 1) — score_articles must
+    # not be re-sent either id.
+    run_nlp_pipeline(db_path=db_path)
+    ids_seen_in_run2 = [i for call in call_ids[1:] for i in call]
+    assert ids_seen_in_run2 == [], (
+        f"cached articles were re-sent to score_articles: {ids_seen_in_run2}"
+    )

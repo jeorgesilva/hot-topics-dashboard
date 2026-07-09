@@ -154,3 +154,39 @@ class TestRunPipeline:
         summary = run_pipeline(db_path=tmp_path / "test.db")
         assert summary["rss_seeds"] == 0
         assert summary["topics_created"] == 0
+
+    @patch("src.scrapers.run_all.enrich_articles_with_body")
+    @patch("src.scrapers.run_all._cluster_into_topics")
+    @patch("src.scrapers.run_all.discover_articles_broad")
+    def test_broad_search_topic_drops_below_min_qualify(
+        self, mock_discover, mock_cluster, mock_enrich, tmp_path
+    ):
+        # Non-empty discovery result so the pipeline doesn't abort early;
+        # _cluster_into_topics is mocked directly so its exact shape is irrelevant.
+        mock_discover.return_value = [
+            {"url": "https://reuters.com/1", "title": "seed", "snippet": None}
+        ]
+
+        cluster_articles = [
+            _make_item(f"c{i}", "Bundesrat Migrationspolitik", "broad_search")
+            for i in range(20)
+        ]
+        mock_cluster.return_value = [("Bundesrat Migrationspolitik", cluster_articles)]
+
+        def _enrich_only_a_few(articles):
+            # Only 3 of the 20 articles get body text — below min_qualify (10).
+            for item in articles[:3]:
+                item["body_text"] = "full article text"
+
+        mock_enrich.side_effect = _enrich_only_a_few
+
+        from src.scrapers.run_all import run_pipeline
+        summary = run_pipeline(
+            target_topics=1,
+            articles_per_topic=20,
+            min_articles_no_newsapi=10,
+            db_path=tmp_path / "test.db",
+            broad_search=True,
+        )
+        assert summary["topics_created"] == 0
+        assert summary["topics_dropped"] >= 1

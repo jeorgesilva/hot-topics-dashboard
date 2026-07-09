@@ -60,7 +60,7 @@ _DE_STOPWORDS = frozenset({
 # Delay between consecutive NewsAPI calls for the same topic (free tier safety).
 _INTER_QUERY_DELAY_S: float = 1.0
 
-# Hard cap on NewsAPI calls per topic. With 15 topics × 6 calls = 90 requests/day,
+# Hard cap on NewsAPI calls per topic. With 10 topics × 6 calls = 60 requests/day,
 # safely under the free-tier limit of 100 requests/day.
 _MAX_API_CALLS_PER_TOPIC: int = 6
 
@@ -659,7 +659,7 @@ def main() -> None:
         "--min-articles-no-newsapi", type=int, default=10,
         help=(
             "Minimum verified articles to qualify a topic when --no-newsapi is set "
-            "(default: 15; lower than --articles-per-topic because the RSS pool alone "
+            "(default: 10; lower than --articles-per-topic because the RSS pool alone "
             "cannot supply 20 articles for niche stories)"
         ),
     )

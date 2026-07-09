@@ -1,5 +1,10 @@
 """YouTube trending videos scraper using the Data API v3.
 
+DISABLED: not called by run_all.py or orchestrator.py. YOUTUBE_API_KEY is
+hardcoded to None below, so _get_client() always raises. Re-enable by
+restoring the commented-out YOUTUBE_API_KEY line and wiring scrape_youtube()
+into the pipeline.
+
 Fetches trending/most-popular videos in the News & Politics category
 and returns them as list[RawItem].
 
@@ -116,10 +121,14 @@ def scrape_youtube(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     results = scrape_youtube(limit=50)
     csv_path = Path("data/raw/youtube_DE.csv")
     written = update_csv(results, csv_path)
     for r in results[:3]:
-        print(f"[{r['source']}] {r['title'][:80]}  (views={r['engagement']['score']})")
-    print(f"... {len(results)} fetched, {written} new rows written to {csv_path}")
+        logger.info("[%s] %s  (views=%d)", r["source"], r["title"][:80], r["engagement"]["score"])
+    logger.info("... %d fetched, %d new rows written to %s", len(results), written, csv_path)
