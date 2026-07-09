@@ -64,7 +64,7 @@ def _load_topic_articles(
         SELECT ri.id, ri.title, ri.description, ri.body_text,
                ri.source, ri.url,
                ri.platform, ri.timestamp, ri.engagement_json,
-               ri.cleaned_text
+               ri.cleaned_text, ri.sentiment_extremity, ri.sensationalism_score
         FROM topic_sources ts
         JOIN raw_items ri ON ri.id = ts.item_id
         WHERE ts.topic_id = ?
@@ -111,15 +111,27 @@ def run_nlp_pipeline(db_path=None) -> dict:
             logger.info("  topic %d: no verified articles, skipping", topic_id)
             continue
 
-        cached_v   = [a for a in verified if     a.get("cleaned_text")]
-        uncached_v = [a for a in verified if not a.get("cleaned_text")]
+        cached_v = [
+            a for a in verified
+            if a.get("cleaned_text")
+            and a.get("sentiment_extremity") is not None
+            and a.get("sensationalism_score") is not None
+        ]
+        cached_ids = {a["id"] for a in cached_v}
+        uncached_v = [a for a in verified if a["id"] not in cached_ids]
         logger.info(
-            "cache NLP: %d/%d artigos já processados (tópico %d)",
+            "NLP cache: %d/%d articles already processed (topic %d)",
             len(cached_v), len(verified), topic_id,
         )
-        logger.info("  topic %d: scoring %d verified articles...", topic_id, len(verified))
+        logger.info(
+            "  topic %d: scoring %d new articles (%d cached)...",
+            topic_id, len(uncached_v), len(cached_v),
+        )
 
-        scored_verified = score_articles(verified)
+        newly_scored = score_articles(uncached_v) if uncached_v else []
+        scored_by_id = {a["id"]: a for a in cached_v}
+        scored_by_id.update({a["id"]: a for a in newly_scored})
+        scored_verified = [scored_by_id[a["id"]] for a in verified]
 
         avg_sentiment_extremity = statistics.mean(
             a["sentiment_extremity"] for a in scored_verified
@@ -157,13 +169,17 @@ def run_nlp_pipeline(db_path=None) -> dict:
             a["article_risk_score"] for a in scored_verified
         )
 
-        uncached_v_ids = {a["id"] for a in uncached_v}
-        for a in scored_verified:
-            if a.get("cleaned_text") and a["id"] in uncached_v_ids:
-                conn.execute(
-                    "UPDATE raw_items SET cleaned_text = ? WHERE id = ?",
-                    (a["cleaned_text"], a["id"]),
-                )
+        conn.executemany(
+            """
+            UPDATE raw_items
+            SET cleaned_text = ?, sentiment_extremity = ?, sensationalism_score = ?
+            WHERE id = ?
+            """,
+            [
+                (a["cleaned_text"], a["sentiment_extremity"], a["sensationalism_score"], a["id"])
+                for a in newly_scored
+            ],
+        )
 
         conn.executemany(
             "UPDATE raw_items SET article_risk_score = ? WHERE id = ?",

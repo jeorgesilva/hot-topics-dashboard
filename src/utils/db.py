@@ -55,6 +55,8 @@ def run_schema_migrations(conn: sqlite3.Connection) -> None:
         "ALTER TABLE raw_items    ADD COLUMN article_risk_score REAL",
         "ALTER TABLE topic_scores ADD COLUMN avg_article_risk   REAL",
         "ALTER TABLE topics       ADD COLUMN run_id INTEGER",
+        "ALTER TABLE raw_items    ADD COLUMN sentiment_extremity  REAL",
+        "ALTER TABLE raw_items    ADD COLUMN sensationalism_score REAL",
     ]
     for sql in migrations:
         try:
