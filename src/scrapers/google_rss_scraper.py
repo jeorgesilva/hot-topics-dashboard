@@ -184,11 +184,15 @@ def scrape_google_trends(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     GEO = "DE"
     results = scrape_google_trends(geo=GEO)
     csv_path = Path("data/raw") / f"google_news_{GEO.lower()}.csv"
     written = update_csv(results, csv_path)
     for r in results[:5]:
-        print(f"[{r['source']}] {r['title'][:80]}")
-    print(f"... {len(results)} fetched, {written} new rows written to {csv_path}")
+        logger.info("[%s] %s", r["source"], r["title"][:80])
+    logger.info("... %d fetched, %d new rows written to %s", len(results), written, csv_path)

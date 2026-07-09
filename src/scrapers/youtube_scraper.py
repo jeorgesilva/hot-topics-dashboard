@@ -121,10 +121,14 @@ def scrape_youtube(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     results = scrape_youtube(limit=50)
     csv_path = Path("data/raw/youtube_DE.csv")
     written = update_csv(results, csv_path)
     for r in results[:3]:
-        print(f"[{r['source']}] {r['title'][:80]}  (views={r['engagement']['score']})")
-    print(f"... {len(results)} fetched, {written} new rows written to {csv_path}")
+        logger.info("[%s] %s  (views=%d)", r["source"], r["title"][:80], r["engagement"]["score"])
+    logger.info("... %d fetched, %d new rows written to %s", len(results), written, csv_path)

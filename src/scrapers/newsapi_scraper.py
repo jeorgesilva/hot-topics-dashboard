@@ -234,28 +234,32 @@ def _update_csv(items: list[RawItem], path: Path) -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
-    print("=== FETCHING ARTICLES VIA NEWSAPI ===")
+    logger.info("=== FETCHING ARTICLES VIA NEWSAPI ===")
     results = scrape_newsapi(query="Deutschland", language="de", max_articles=50)
 
     if not results:
-        print("No articles found.")
+        logger.info("No articles found.")
     else:
         csv_path = Path("data/raw/newsapi_de.csv")
         written = _update_csv(results, csv_path)
 
         for r in results[:5]:
-            print(f"[{r['source']}] {r['title'][:80]}")
+            logger.info("[%s] %s", r["source"], r["title"][:80])
 
-        print(f"\n=== EXTRACTING ARTICLE TEXT ===")
+        logger.info("=== EXTRACTING ARTICLE TEXT ===")
         df = pd.read_csv(csv_path)
         df = fetch_full_text(df)
         df.to_csv(csv_path, index=False)
 
         total = len(df)
         with_text = df["text"].notna().sum()
-        print(f"\nCSV saved: {csv_path}")
-        print(f"Total articles: {total}")
-        print(f"New this run:   {written}")
-        print(f"With text:      {with_text}")
+        logger.info("CSV saved: %s", csv_path)
+        logger.info("Total articles: %d", total)
+        logger.info("New this run:   %d", written)
+        logger.info("With text:      %d", with_text)
