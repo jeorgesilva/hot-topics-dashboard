@@ -38,6 +38,17 @@ Thumbs.db
 # Claude Code local overrides
 CLAUDE.local.md
 
+# Claude Code project config/instructions — kept locally only, never pushed
+.claude/
+
+# Local planning/session notes — kept locally only, never pushed
+/DOCUMENTACAO.txt
+/REFACTORING_TASKS.md
+/SESSION_REPORT_*.txt
+/analise_hot-topics-dashboard.md
+/prompt_claude_code_implementacao.md
+/solucoes_nlp_hot-topics-dashboard.md
+
 # n8n
 n8n-data/
 
