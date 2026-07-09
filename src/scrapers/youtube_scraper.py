@@ -1,5 +1,10 @@
 """YouTube trending videos scraper using the Data API v3.
 
+DISABLED: not called by run_all.py or orchestrator.py. YOUTUBE_API_KEY is
+hardcoded to None below, so _get_client() always raises. Re-enable by
+restoring the commented-out YOUTUBE_API_KEY line and wiring scrape_youtube()
+into the pipeline.
+
 Fetches trending/most-popular videos in the News & Politics category
 and returns them as list[RawItem].
 

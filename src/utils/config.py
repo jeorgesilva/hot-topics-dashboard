@@ -33,10 +33,6 @@ def _get(key: str, required: bool = False) -> str | None:
 # Optional: NewsAPI
 NEWSAPI_KEY = _get("NEWSAPI_KEY")
 
-# Optional: Telegram notifications
-TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = _get("TELEGRAM_CHAT_ID")
-
 # SearXNG self-hosted instance; falls back to DuckDuckGo when absent
 SEARXNG_URL: str = os.getenv("SEARXNG_URL") or "http://localhost:8080"
 
