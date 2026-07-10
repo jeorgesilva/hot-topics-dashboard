@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 
-from src.nlp.ner import extract_entities
+from src.nlp.embeddings import get_model as _get_model
+from src.scoring.contradiction import compute_fact_inconsistency
 
 if TYPE_CHECKING:
     from src.scoring.sentiment import ScoredArticle
-
-_model = None
 
 _HIGH_TRUST_THRESHOLD: float = 60.0
 _DEFAULT_TRUST: float = 50.0
@@ -24,15 +23,6 @@ class FramingResult(TypedDict):
     low_trust_centroid: list[float]
     high_trust_articles: list[str]
     low_trust_articles: list[str]
-
-
-def _get_model():
-    """Lazy-load the sentence-transformers embedding model."""
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-mpnet-base-v2")
-    return _model
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -79,41 +69,6 @@ def _intra_cluster_variance(articles: list[ScoredArticle], model) -> float:
     centroid = _mean_vector(embeddings)
     distances = [max(0.0, 1.0 - _cosine_similarity(emb, centroid)) for emb in embeddings]
     return round(sum(distances) / len(distances), 4)
-
-
-def _entity_overlap_score(
-    high_articles: list[ScoredArticle],
-    low_articles: list[ScoredArticle],
-) -> float:
-    """Jaccard distance between named-entity sets of the two trust tiers.
-
-    Extracts PERSON, ORG, and location entities from each tier's cleaned
-    text and returns 1 - (|intersection| / |union|). Returns 0.0 when
-    neither tier yields extractable entities to avoid penalising topics
-    where spaCy NER produces no annotations.
-
-    Args:
-        high_articles: Articles in the high-trust tier.
-        low_articles: Articles in the low-trust tier.
-
-    Returns:
-        Entity inconsistency in [0.0, 1.0].
-    """
-    def _entity_set(articles: list[ScoredArticle]) -> set[str]:
-        entities: set[str] = set()
-        for a in articles:
-            tags = extract_entities(a["cleaned_text"] or a["title"])
-            for bucket in ("persons", "organizations", "locations"):
-                for e in tags[bucket]:
-                    entities.add(e.lower().strip())
-        return entities
-
-    high_ents = _entity_set(high_articles)
-    low_ents = _entity_set(low_articles)
-    union = high_ents | low_ents
-    if not union:
-        return 0.0
-    return round(1.0 - len(high_ents & low_ents) / len(union), 4)
 
 
 def compute_framing(
@@ -209,7 +164,7 @@ def compute_framing(
 
     return FramingResult(
         framing_inconsistency=inconsistency,
-        fact_inconsistency=_entity_overlap_score(high_articles, low_articles),
+        fact_inconsistency=compute_fact_inconsistency(high_articles, low_articles),
         high_trust_centroid=high_centroid,
         low_trust_centroid=low_centroid,
         high_trust_articles=[a["url"] for a in high_articles],

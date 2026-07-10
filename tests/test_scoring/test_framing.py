@@ -9,7 +9,6 @@ import pytest
 from src.scoring.framing import (
     FramingResult,
     _cosine_similarity,
-    _entity_overlap_score,
     _mean_vector,
     compute_framing,
 )
@@ -61,13 +60,16 @@ class _MockEncoder:
         return np.array(batch)
 
 
-_EMPTY_NER = {"persons": [], "organizations": [], "locations": [], "events": []}
-
-
 @pytest.fixture
 def empty_ner(monkeypatch):
-    """Stub NER so compute_framing tests stay fast and isolated from spaCy."""
-    monkeypatch.setattr("src.scoring.framing.extract_entities", lambda _text: _EMPTY_NER)
+    """Stub NER and NLI contradiction detection.
+
+    compute_framing tests exercise framing_inconsistency (embeddings), not
+    fact_inconsistency (NLI) — stub compute_fact_inconsistency to a fixed
+    0.0 so these tests stay fast and never load the NLI model. Tests for
+    fact_inconsistency itself live in test_contradiction.py.
+    """
+    monkeypatch.setattr("src.scoring.framing.compute_fact_inconsistency", lambda high, low: 0.0)
 
 
 @pytest.fixture
@@ -265,97 +267,41 @@ class TestComputeFraming:
 
 
 # ---------------------------------------------------------------------------
-# _entity_overlap_score unit tests
+# fact_inconsistency delegation to the contradiction module (Fase 4)
 # ---------------------------------------------------------------------------
 
-def _fake_extract(responses: dict[str, dict]):
-    """Return a mock extract_entities that maps cleaned_text → entity tags."""
-    default = {"persons": [], "organizations": [], "locations": [], "events": []}
-    def extract(text: str) -> dict:
-        return responses.get(text, default)
-    return extract
+class TestFactInconsistencyDelegation:
+    """compute_framing must forward to contradiction.compute_fact_inconsistency
+    (Jaccard entity-overlap was retired — see test_contradiction.py for the
+    NLI-based metric's own unit tests)."""
 
-
-class TestEntityOverlapScore:
-    def test_identical_entities_return_zero(self, monkeypatch):
-        tags = {"persons": ["Alice"], "organizations": [], "locations": [], "events": []}
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({"text_a": tags, "text_b": tags}),
+    def test_two_tier_result_uses_contradiction_module(self, monkeypatch, identical_model):
+        monkeypatch.setattr("src.scoring.framing.compute_fact_inconsistency", lambda high, low: 0.4)
+        articles = (
+            [_make_scored("h0", "bbc.com")]
+            + [_make_scored("l0", "tabloid.net")]
         )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="text_a")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="text_b")]
-        assert _entity_overlap_score(high, low) == 0.0
+        trust = {"bbc.com": 90.0, "tabloid.net": 10.0}
+        result = compute_framing(articles, trust)
+        assert result["fact_inconsistency"] == 0.4
 
-    def test_disjoint_entities_return_one(self, monkeypatch):
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({
-                "text_a": {"persons": ["Alice"], "organizations": [], "locations": [], "events": []},
-                "text_b": {"persons": ["Bob"], "organizations": [], "locations": [], "events": []},
-            }),
-        )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="text_a")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="text_b")]
-        assert _entity_overlap_score(high, low) == 1.0
+    def test_receives_correct_tier_partition(self, monkeypatch, identical_model):
+        captured = {}
 
-    def test_partial_overlap_correct_value(self, monkeypatch):
-        # high={alice, bob}, low={alice, carol} → |inter|=1, |union|=3 → 1 - 1/3 ≈ 0.6667
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({
-                "high_text": {"persons": ["Alice", "Bob"], "organizations": [], "locations": [], "events": []},
-                "low_text": {"persons": ["Alice", "Carol"], "organizations": [], "locations": [], "events": []},
-            }),
-        )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="high_text")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="low_text")]
-        result = _entity_overlap_score(high, low)
-        assert abs(result - round(2 / 3, 4)) < 1e-4
+        def _capture(high, low):
+            captured["high"] = [a["id"] for a in high]
+            captured["low"] = [a["id"] for a in low]
+            return 0.0
 
-    def test_no_entities_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({}),  # all texts return empty default
+        monkeypatch.setattr("src.scoring.framing.compute_fact_inconsistency", _capture)
+        articles = (
+            [_make_scored("h0", "bbc.com")]
+            + [_make_scored("l0", "tabloid.net")]
         )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="text_a")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="text_b")]
-        assert _entity_overlap_score(high, low) == 0.0
-
-    def test_bounded_zero_to_one(self, monkeypatch):
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({
-                "text_a": {"persons": ["Alice", "Bob"], "organizations": ["UN"], "locations": ["Paris"], "events": []},
-                "text_b": {"persons": ["Dave", "Eve"], "organizations": ["NATO"], "locations": ["Berlin"], "events": []},
-            }),
-        )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="text_a")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="text_b")]
-        result = _entity_overlap_score(high, low)
-        assert 0.0 <= result <= 1.0
-
-    def test_orgs_and_locations_included(self, monkeypatch):
-        # Verify ORG and location entities contribute to the overlap score
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({
-                "text_a": {"persons": [], "organizations": ["UN"], "locations": ["Paris"], "events": []},
-                "text_b": {"persons": [], "organizations": ["UN"], "locations": ["Paris"], "events": []},
-            }),
-        )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="text_a")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="text_b")]
-        assert _entity_overlap_score(high, low) == 0.0
-
-    def test_score_is_float(self, monkeypatch):
-        monkeypatch.setattr(
-            "src.scoring.framing.extract_entities",
-            _fake_extract({"t": {"persons": ["Alice"], "organizations": [], "locations": [], "events": []}}),
-        )
-        high = [_make_scored("h0", "bbc.com", cleaned_text="t")]
-        low = [_make_scored("l0", "fake.net", cleaned_text="t")]
-        assert isinstance(_entity_overlap_score(high, low), float)
+        trust = {"bbc.com": 90.0, "tabloid.net": 10.0}
+        compute_framing(articles, trust)
+        assert captured["high"] == ["h0"]
+        assert captured["low"] == ["l0"]
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +327,7 @@ class TestBatchEncoding:
         inner = _MockEncoder(*([vec] * 20))
         recorder = _RecordingEncoder(inner)
         monkeypatch.setattr("src.scoring.framing._get_model", lambda: recorder)
-        monkeypatch.setattr("src.scoring.framing.extract_entities", lambda _: _EMPTY_NER)
+        monkeypatch.setattr("src.scoring.framing.compute_fact_inconsistency", lambda high, low: 0.0)
 
         articles = [
             _make_scored(f"a{i}", "bbc.com" if i % 2 == 0 else "tabloid.net")
@@ -403,7 +349,7 @@ class TestBatchEncoding:
         inner = _MockEncoder(*([vec] * 20))
         recorder = _RecordingEncoder(inner)
         monkeypatch.setattr("src.scoring.framing._get_model", lambda: recorder)
-        monkeypatch.setattr("src.scoring.framing.extract_entities", lambda _: _EMPTY_NER)
+        monkeypatch.setattr("src.scoring.framing.compute_fact_inconsistency", lambda high, low: 0.0)
 
         articles = [_make_scored(f"a{i}", "bbc.com") for i in range(5)]
         trust = {"bbc.com": 90.0}

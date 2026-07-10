@@ -9,7 +9,8 @@ Formula (weights from src/scoring/weights.py::COMPOSITE_RISK_WEIGHTS, sum to 1.0
                                                                    sentiment, sensationalism,
                                                                    attribution vagueness
          + framing_inconsistency * w["framing_inconsistency"]  ← how much articles disagree
-         + fact_inconsistency * w["fact_inconsistency"]         ← NER entity conflicts
+         + fact_inconsistency * w["fact_inconsistency"]         ← NLI-detected contradictions
+                                                                   (src/scoring/contradiction.py)
 
 Usage:
     python src/scoring/compute_scores.py
@@ -49,7 +50,8 @@ def compute_risk(
             attribution vagueness at the per-article level.
         framing_inconsistency: Cosine-distance-based framing divergence (0–1).
             Measures how much articles in the topic disagree with each other.
-        fact_inconsistency: NER entity overlap inconsistency (0–1). Defaults to 0.0.
+        fact_inconsistency: Proportion of cross-tier sentence pairs an NLI
+            model classifies as contradiction (0–1). Defaults to 0.0.
 
     Returns:
         Composite risk in [0.0, 1.0].
