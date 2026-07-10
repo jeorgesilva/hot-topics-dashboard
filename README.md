@@ -87,19 +87,27 @@ streamlit run src/dashboard/app.py
 
 ---
 
-## Risk signals
+<!-- AUTO-GENERATED: scoring formulas, do not edit by hand -->
+## Scoring formulas
 
-| Signal | Weight | Description |
-|--------|--------|-------------|
-| Source Distrust | 25 % | Share of coverage from low-trust domains (MBFC score < 40) |
-| Sentiment Extremity | 20 % | Average emotional deviation from neutral across articles |
-| Low Coverage | 20 % | Ratio of incredible domains among all covering domains |
-| Framing Divergence | 15 % | Cosine distance between high-trust and low-trust tier embeddings |
-| Sensationalism | 10 % | Density of caps, exclamation marks, clickbait phrases |
-| Attribution Vagueness | 5 % | Frequency of vague sourcing ("experts say", "sources claim") |
-| Fact Inconsistency | 5 % | Jaccard distance between named-entity sets of the two tiers |
+**Article risk** (`article_scorer.py`) — per-article score stored in `raw_items.article_risk_score`:
+```
+article_risk = 0.15 × source_distrust + 0.30 × sentiment_extremity
+               + 0.30 × sensationalism + 0.25 × attribution_vagueness
+```
 
-A `composite_risk` ≥ 50 % is flagged as a potential misinformation signal.
+**Composite risk** (`compute_scores.py`) — per-topic score stored in `topic_scores.composite_risk`:
+```
+composite_risk = 0.55 × avg_article_risk + 0.10 × framing_inconsistency
+                 + 0.35 × fact_inconsistency
+```
+
+`composite_risk` > 0.50 (50 %) is the misinformation flag threshold (`_MISINFO_THRESHOLD`).
+
+Weights are defined once in `src/scoring/weights.py` and this section is generated from that file by `scripts/render_docs.py` — do not hand-edit the numbers above.
+<!-- END AUTO-GENERATED: scoring formulas -->
+
+> TODO(fase-8): `social_risk` is computed with this same composite formula against a "social media / Reddit" track, but no scraper currently populates the `social_*` signals it reads from — `social_risk` and `narrative_divergence` are always `NULL` in practice. The "Two-track analysis" and Reddit-related copy elsewhere in this README describes that track as if it were live; leaving it as-is pending the Fase 8 decision (remove vs. reconceptualize) rather than rewriting it here.
 
 ---
 

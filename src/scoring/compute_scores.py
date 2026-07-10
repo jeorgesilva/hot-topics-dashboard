@@ -4,11 +4,12 @@ Aggregates per-article risk (from article_scorer.py) and group-level NLP
 signals into a single composite_risk score (0–1) per topic, then maps it
 to a reliability grade (A–F).
 
-Formula (weights sum to 1.0):
-    risk = 0.55 * avg_article_risk        ← bundles source trust, sentiment,
-                                             sensationalism, attribution vagueness
-         + 0.10 * framing_inconsistency   ← how much articles disagree with each other
-         + 0.35 * fact_inconsistency      ← NER entity conflicts across articles
+Formula (weights from src/scoring/weights.py::COMPOSITE_RISK_WEIGHTS, sum to 1.0):
+    risk = avg_article_risk * w["avg_article_risk"]            ← bundles source trust,
+                                                                   sentiment, sensationalism,
+                                                                   attribution vagueness
+         + framing_inconsistency * w["framing_inconsistency"]  ← how much articles disagree
+         + fact_inconsistency * w["fact_inconsistency"]         ← NER entity conflicts
 
 Usage:
     python src/scoring/compute_scores.py
@@ -24,18 +25,10 @@ import sqlite3
 
 from src.scoring.article_scorer import score_article
 from src.scoring.source_trust import score_coverage
+from src.scoring.weights import COMPOSITE_RISK_WEIGHTS as _WEIGHTS
 from src.utils.db import init_db
 
 logger = logging.getLogger(__name__)
-
-# Composite formula weights — must sum to 1.0
-_WEIGHTS: dict[str, float] = {
-    "avg_article_risk":      0.55,
-    "framing_inconsistency": 0.10,
-    "fact_inconsistency":    0.35,
-}
-
-assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
 _MISINFO_THRESHOLD = 0.50  # composite_risk above this = likely misinformation
 
