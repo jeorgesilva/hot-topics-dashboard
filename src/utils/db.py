@@ -192,6 +192,23 @@ def init_db(
         CREATE INDEX IF NOT EXISTS idx_claim_verifications_topic
         ON claim_verifications(topic_id)
     """)
+    # Per-domain reliability estimate (Fase 6) — posterior built incrementally
+    # from claim_verifications verdicts, blended with the domain_resolver prior.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS source_reliability (
+            domain            TEXT PRIMARY KEY,
+            weighted_sum      REAL NOT NULL DEFAULT 0.0,
+            weight_total      REAL NOT NULL DEFAULT 0.0,
+            verdict_count     INTEGER NOT NULL DEFAULT 0,
+            reliability_score REAL NOT NULL DEFAULT 50.0,
+            updated_at        TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS source_reliability_applied (
+            claim_verification_id INTEGER PRIMARY KEY
+        )
+    """)
 
     # Session-5 and later migrations (idempotent).
     run_schema_migrations(conn)
