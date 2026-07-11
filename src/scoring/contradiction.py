@@ -20,13 +20,10 @@ from typing import TYPE_CHECKING
 
 from src.nlp.embeddings import get_model
 from src.nlp.ner import extract_entities
+from src.nlp.nli import get_pipeline as _get_pipeline
 
 if TYPE_CHECKING:
     from src.scoring.sentiment import ScoredArticle
-
-_pipeline = None
-
-_NLI_MODEL = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
 
 # Cost controls: NLI forward passes are the expensive step, so only the
 # _MAX_PAIRS most promising sentence pairs (by embedding similarity /
@@ -38,20 +35,6 @@ _MIN_SENTENCE_LEN = 20
 _CONTRADICTION_CONFIDENCE_THRESHOLD = 0.60
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def _get_pipeline():
-    """Lazy-load the HuggingFace NLI text-classification pipeline."""
-    global _pipeline
-    if _pipeline is None:
-        from transformers import pipeline
-        _pipeline = pipeline(
-            "text-classification",
-            model=_NLI_MODEL,
-            top_k=None,
-            tokenizer_kwargs={"truncation": True, "max_length": 256},
-        )
-    return _pipeline
 
 
 def _split_sentences(text: str) -> list[str]:

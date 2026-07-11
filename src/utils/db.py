@@ -174,6 +174,24 @@ def init_db(
             cached_at   TEXT NOT NULL
         )
     """)
+    # Claim verification results (Fase 5) — not yet read by any scoring step.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS claim_verifications (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id         INTEGER REFERENCES topics(id),
+            item_id          TEXT REFERENCES raw_items(id),
+            claim_text       TEXT NOT NULL,
+            verdict          TEXT NOT NULL,
+            evidence_url     TEXT,
+            evidence_snippet TEXT,
+            confidence       REAL,
+            checked_at       TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_claim_verifications_topic
+        ON claim_verifications(topic_id)
+    """)
 
     # Session-5 and later migrations (idempotent).
     run_schema_migrations(conn)

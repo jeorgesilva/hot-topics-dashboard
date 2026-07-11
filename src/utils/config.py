@@ -39,3 +39,6 @@ SEARXNG_URL: str = os.getenv("SEARXNG_URL") or "http://localhost:8080"
 # Domain trust — live scoring signals
 GOOGLE_SAFE_BROWSING_KEY = _get("GOOGLE_SAFE_BROWSING_KEY")
 OPEN_PAGE_RANK_KEY = _get("OPEN_PAGE_RANK_KEY")
+
+# Claim verification (Fase 5) — evidence retrieval
+GOOGLE_FACT_CHECK_API_KEY = _get("GOOGLE_FACT_CHECK_API_KEY")
