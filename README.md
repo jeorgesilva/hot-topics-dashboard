@@ -90,21 +90,33 @@ streamlit run src/dashboard/app.py
 <!-- AUTO-GENERATED: scoring formulas, do not edit by hand -->
 ## Scoring formulas
 
+Topics are scored on **two independent tiers** (Fase 7) instead of one blended number:
+
 **Article risk** (`article_scorer.py`) — per-article score stored in `raw_items.article_risk_score`:
 ```
 article_risk = 0.15 × source_distrust + 0.30 × sentiment_extremity
                + 0.30 × sensationalism + 0.25 × attribution_vagueness
 ```
 
-**Composite risk** (`compute_scores.py`) — per-topic score stored in `topic_scores.composite_risk`:
+**Linguistic-only risk** (`compute_scores.py`) — always computable once `run_nlp` has scored a topic; stored in `topic_scores.linguistic_only_risk`:
 ```
-composite_risk = 0.55 × avg_article_risk + 0.10 × framing_inconsistency
-                 + 0.35 × fact_inconsistency
+linguistic_only_risk = 0.55 × avg_article_risk + 0.10 × framing_inconsistency
+                       + 0.35 × fact_inconsistency
+```
+
+**Evidence-grounded risk** (`compute_scores.py::compute_evidence_signals`) — fraction of RAG-verified claims (Fase 5, `claim_verifications`) that were `refuted` among claims with a definite verdict (`supported` ∪ `refuted`, excluding `not_enough_evidence`). Stored in `topic_scores.evidence_grounded_risk` (`NULL` when no claim has a definite verdict). `topic_scores.evidence_coverage` is the fraction of checked claims that had a definite verdict.
+
+**Combined score** (`compute_scores.py::compute_overall_risk`) — the single sortable/flaggable number stored in `topic_scores.composite_risk`:
+```
+composite_risk = evidence_grounded_risk  if evidence_coverage > 0.30 (30 %)
+                = linguistic_only_risk    otherwise
 ```
 
 `composite_risk` > 0.50 (50 %) is the misinformation flag threshold (`_MISINFO_THRESHOLD`).
 
-Weights are defined once in `src/scoring/weights.py` and this section is generated from that file by `scripts/render_docs.py` — do not hand-edit the numbers above.
+**Overall confidence** (`compute_scores.py::compute_overall_confidence`) — `topic_scores.overall_confidence` (`'high'` / `'medium'` / `'low'`), the average of `evidence_coverage` and the topic's mean Fase 6 `source_reliability.resolve_reliability()` confidence across its article domains: ≥ 0.65 (65 %) → high, ≥ 0.35 (35 %) → medium, else low.
+
+Weights and thresholds are defined once in `src/scoring/weights.py` and this section is generated from that file by `scripts/render_docs.py` — do not hand-edit the numbers above.
 <!-- END AUTO-GENERATED: scoring formulas -->
 
 > TODO(fase-8): `social_risk` is computed with this same composite formula against a "social media / Reddit" track, but no scraper currently populates the `social_*` signals it reads from — `social_risk` and `narrative_divergence` are always `NULL` in practice. The "Two-track analysis" and Reddit-related copy elsewhere in this README describes that track as if it were live; leaving it as-is pending the Fase 8 decision (remove vs. reconceptualize) rather than rewriting it here.

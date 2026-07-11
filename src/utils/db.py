@@ -162,7 +162,11 @@ def init_db(
             social_attribution_vagueness   REAL,
             social_fact_inconsistency      REAL,
             social_risk                    REAL,
-            narrative_divergence           REAL
+            narrative_divergence           REAL,
+            evidence_grounded_risk         REAL,
+            evidence_coverage              REAL,
+            linguistic_only_risk           REAL,
+            overall_confidence             TEXT
         )
     """)
     # Dynamic trust resolver cache — keyed by domain, populated on first lookup.
@@ -237,6 +241,12 @@ def init_db(
         ("social_fact_inconsistency",      "REAL"),
         ("social_risk",                    "REAL"),
         ("narrative_divergence",           "REAL"),
+        # Fase 7: two-tier score — evidence-grounded (Fase 5 claim verdicts)
+        # kept separate from the always-available linguistic-only signal.
+        ("evidence_grounded_risk",         "REAL"),
+        ("evidence_coverage",              "REAL"),
+        ("linguistic_only_risk",           "REAL"),
+        ("overall_confidence",             "TEXT"),
     ]:
         if col not in existing:
             conn.execute(f"ALTER TABLE topic_scores ADD COLUMN {col} {type_}")
