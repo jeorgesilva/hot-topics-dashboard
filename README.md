@@ -1,31 +1,39 @@
 # Hot Topics — Misinformation Risk Dashboard
 
-Real-time dashboard that monitors trending German-language topics across curated RSS feeds and NewsAPI — then scores each topic's misinformation risk using NLP-based analysis.
-
-The dashboard is entirely in German and targets the DACH media landscape.
+Real-time misinformation detection dashboard for German-language news. Topics are discovered from the open web via broad search (SearXNG/DDG) with semantic clustering — no curated RSS preselection required — scored for misinformation risk with NLP + RAG-based fact-checking, and displayed in a Streamlit dashboard. A curated RSS/NewsAPI mode is available as a fallback.
 
 ---
 
 ## Features
 
-- **Multi-source pipeline** — aggregates verified journalism from 45+ curated German RSS feeds and NewsAPI into a unified topic model
-- **7-signal risk scoring** — each topic gets a composite risk score built from source trustworthiness, sentiment extremity, coverage breadth, framing divergence, sensationalism, attribution vagueness, and fact inconsistency
-- **Framing inconsistency** — cosine distance between multilingual sentence embeddings of high-trust vs. low-trust source tiers detects narrative divergence at the NLP level
-- **Domain trust resolver** — MBFC-curated CSV → TLD heuristic fallback → default; scores every domain 0–100
-- **Interactive Streamlit dashboard** — risk radar, waterfall contribution chart, domain trust bar, per-article signal gauges
+- **Broad topic discovery** — no editorial preselection: 7 broad German-news queries hit SearXNG (self-hosted, DDG fallback), results are deduplicated, then grouped into topics via sentence-embedding clustering
+- **Curated fallback mode** (`--no-broad-search`) — 45 curated German RSS feeds + NewsAPI for a fully deterministic, editorially-scoped topic pool
+- **Two-tier risk scoring** — `linguistic_only_risk` (always computable: source trust, sentiment, sensationalism, attribution vagueness, framing divergence, NLI fact inconsistency) and `evidence_grounded_risk` (fraction of RAG-verified claims refuted), combined into a single `composite_risk`
+- **RAG claim verification** — claims extracted per article are checked against Google Fact Check Tools, Wikidata, and web search evidence via a multilingual NLI model (`MoritzLaurer/mDeBERTa-v3-base-mnli-xnli`)
+- **Truth-discovery source reliability** — per-domain reliability posterior built from the accumulated history of claim verdicts, blended with the domain trust prior
+- **Domain trust resolver** — MBFC-curated CSV (114 entries) → live signals (Wikidata recognition, OpenPageRank, WHOIS domain age, SPF/DMARC) → Google Safe Browsing hard floor; scores every domain 0–100, cached with a 7-day TTL
+- **Run history** — every pipeline execution is a non-destructive snapshot; the dashboard always shows the latest completed run, with full history queryable in SQLite
+- **Interactive Streamlit dashboard** — topic ranking, risk radar, signal waterfall, domain trust bar, per-article signal gauges, evidence/claim cards, and a demo mode backed by a static sample DB
 
 ---
 
 ## How it works
 
 ```
-RSS feeds (45 sources)  ──┐
-NewsAPI (German news)   ──┘  run_all.py   → topics.db (raw + clustered)
+Broad-search mode (default):
+  SearXNG/DDG (7 broad queries) → dedupe → semantic clustering → topic candidates
+    → targeted search_topic() to fill gaps → trafilatura full-text enrich
+    → clusters with ≥ 10 articles qualify                          run_all.py
 
-topics.db  →  run_nlp.py        → NLP scores per topic (sentiment, framing, attribution…)
-           →  compute_scores.py → composite_risk
+Curated mode (--no-broad-search):
+  45 RSS feeds + NewsAPI (German) → topic clustering                run_all.py
+
+topics.db  →  run_nlp.py        → sentiment, framing, attribution, article_risk_score
+           →  compute_scores.py → linguistic_only_risk, evidence_grounded_risk, composite_risk
            →  app.py            → Streamlit dashboard
 ```
+
+`src/orchestrator.py` runs all three steps in a single process (NLP models loaded once) — the faster alternative to invoking each script separately.
 
 ---
 
@@ -46,30 +54,46 @@ python -m spacy download de_core_news_lg   # German NLP model (required)
 
 ```bash
 cp config/.env.template .env
-# Edit .env — minimum required: NEWSAPI_KEY (free tier at https://newsapi.org/register)
 ```
 
-> **Note:** Without `NEWSAPI_KEY` you can pass `--no-newsapi` to use the RSS pool only.
+| Variable | Required? | Notes |
+|---|---|---|
+| `GOOGLE_SAFE_BROWSING_KEY` | Required | Domain trust hard-floor checks |
+| `NEWSAPI_KEY` | Only for `--no-broad-search` | Free tier: 100 req/day |
+| `SEARXNG_URL` | Optional | Self-hosted SearXNG for broad-search mode; DuckDuckGo is the fallback |
+| `OPEN_PAGE_RANK_KEY` | Optional | Improves unknown-domain trust scoring; free 1000 req/day |
+| `GOOGLE_FACT_CHECK_API_KEY` | Optional | Improves claim-verification evidence retrieval |
+| `GNEWS_API_KEY` | Optional | Alternative to NewsAPI |
+
+To run SearXNG locally: `docker-compose up -d` (starts `hot-topics-searxng` on port 8080; config in `config/searxng/settings.yml`).
 
 ### 3. Run the pipeline
 
 ```bash
-# Step 1 — scrape & cluster
-python -m src.scrapers.run_all
+# Single-process (recommended) — broad-search mode is on by default
+python -m src.orchestrator --target-topics 10 --articles-per-topic 20
 
-# (optional flags)
-python -m src.scrapers.run_all --target-topics 5 --articles-per-topic 20
-python -m src.scrapers.run_all --no-newsapi   # RSS only (no API quota used)
+# Or run each step separately:
+python -m src.scrapers.run_all              # discovery → clustering → topics.db
+python -m src.scoring.run_nlp               # sentiment, framing, attribution scoring
+python -m src.scoring.compute_scores        # linguistic_only_risk, evidence_grounded_risk, composite_risk
 
-# Step 2 — NLP scoring
-python -m src.scoring.run_nlp
+# Curated RSS + NewsAPI instead of broad search:
+python -m src.scrapers.run_all --no-broad-search
 
-# Step 3 — composite scores
-python -m src.scoring.compute_scores
+# Quick smoke test (fewer topics, faster):
+python -m src.scrapers.run_all --target-topics 3 --articles-per-topic 15
+```
 
-# Step 4 — dashboard
+Typical runtime (10 topics × 20 articles, broad-search mode): ~8 min on the first run (domain resolver makes live network calls for unknown domains), ~3–4 min on subsequent runs once the 7-day domain trust cache is warm.
+
+### 4. Run the dashboard
+
+```bash
 streamlit run src/dashboard/app.py
 ```
+
+A **demo mode** toggle is available in the dashboard settings, backed by a static `data/demo.db` sample so the UI can be explored without running the pipeline first.
 
 ---
 
@@ -78,7 +102,7 @@ streamlit run src/dashboard/app.py
 | View | URL param | What it shows |
 |------|-----------|---------------|
 | Home | `?view=home` | Topic ranking table, sentiment vs. sensationalism scatter, composite risk bar chart, expander with scoring methodology |
-| Topic detail | `?view=topic&topic_id=N` | Risk radar, signal waterfall, domain trust bar, article list |
+| Topic detail | `?view=topic&topic_id=N` | Two-tier risk metrics (linguistic-only, evidence-grounded, coverage, confidence), claim/evidence cards, risk radar, signal waterfall, domain trust bar, article list |
 | Article detail | `?view=article&item_id=X` | Per-article signal gauges (sensationalism, attribution vagueness, clickbait density, caps ratio), full text |
 
 ---
@@ -122,50 +146,65 @@ Weights and thresholds are defined once in `src/scoring/weights.py` and this sec
 ```
 hot-topics-dashboard/
 ├── src/
+│   ├── orchestrator.py              # Single-process entry point (all 3 pipeline steps)
 │   ├── scrapers/
-│   │   ├── run_all.py              # Orchestrator (RSS → NewsAPI → cluster)
-│   │   ├── rss_scraper.py          # 45 curated German RSS feeds
-│   │   ├── newsapi_scraper.py      # NewsAPI (German, 100 req/day free)
-│   │   ├── google_rss_scraper.py   # Google News RSS fallback
-│   │   └── article_fetcher.py      # Full-text fetch for RSS items
+│   │   ├── broad_search.py          # SearXNG/DDG discovery, search_topic() gap-fill
+│   │   ├── run_all.py               # Pipeline orchestration (broad + curated modes)
+│   │   ├── rss_scraper.py           # 45 curated German RSS feeds (--no-broad-search only)
+│   │   ├── newsapi_scraper.py       # NewsAPI (German, 100 req/day free)
+│   │   ├── google_rss_scraper.py    # Google News RSS (--no-broad-search only)
+│   │   ├── youtube_scraper.py       # YouTube scraper (disabled by default)
+│   │   └── article_fetcher.py       # trafilatura full-text extraction
 │   ├── nlp/
-│   │   ├── preprocessor.py         # spaCy tokenisation, cleaning
-│   │   ├── ner.py                  # Named entity extraction (PERSON, ORG, LOC)
-│   │   ├── sentiment.py            # HuggingFace german-sentiment-bert
-│   │   └── keywords.py             # Topic keyword extraction
+│   │   ├── preprocessor.py          # spaCy tokenisation, cleaning
+│   │   ├── ner.py                   # Named entity extraction (de_core_news_lg)
+│   │   ├── keywords.py              # Topic keyword extraction
+│   │   ├── topic_query.py           # Search query builder
+│   │   ├── embeddings.py            # Shared sentence-embedding model loader
+│   │   ├── nli.py                   # Shared multilingual NLI pipeline
+│   │   └── claim_extractor.py       # Per-article claim extraction (Fase 5)
 │   ├── scoring/
-│   │   ├── run_nlp.py              # NLP scoring orchestrator
-│   │   ├── compute_scores.py       # Composite risk aggregator
-│   │   ├── source_trust.py         # MBFC CSV loader, domain trust scorer, coverage metrics
-│   │   ├── domain_resolver.py      # TLD heuristic fallback + SQLite cache
-│   │   ├── framing.py              # Sentence embedding framing analysis
-│   │   ├── sentiment.py            # Sentiment extremity scorer
-│   │   └── attribution.py          # Attribution vagueness scorer
+│   │   ├── run_nlp.py               # NLP scoring orchestrator
+│   │   ├── compute_scores.py        # Two-tier risk aggregator
+│   │   ├── source_trust.py          # MBFC CSV loader, coverage metrics
+│   │   ├── domain_resolver.py       # Live trust signals + 7-day TTL SQLite cache
+│   │   ├── source_lookup.py         # Runtime MBFC lookup + disclaimer generator
+│   │   ├── framing.py               # Sentence-embedding framing analysis
+│   │   ├── contradiction.py         # NLI-based cross-tier fact_inconsistency
+│   │   ├── sentiment.py             # Sentiment extremity scorer
+│   │   ├── attribution.py           # Attribution vagueness scorer
+│   │   ├── article_scorer.py        # Per-article risk (4 signals)
+│   │   ├── evidence_retriever.py    # Claim evidence retrieval (Fase 5)
+│   │   ├── claim_verifier.py        # NLI-based claim verification (Fase 5)
+│   │   ├── source_reliability.py    # Truth-discovery reliability posterior (Fase 6)
+│   │   └── weights.py               # All scoring weights/thresholds (single source of truth)
 │   ├── dashboard/
-│   │   ├── app.py                  # Streamlit SPA (home / topic / article views)
-│   │   └── i18n.py                 # German UI string constants
+│   │   ├── app.py                   # Streamlit SPA (home / topic / article views)
+│   │   └── i18n.py                  # UI string constants
 │   └── utils/
-│       ├── db.py                   # SQLite schema + helpers
-│       ├── models.py               # TypedDicts (RawItem, ScoredTopic…)
-│       ├── clustering.py           # TF-IDF + agglomerative clustering
-│       └── dedup.py                # RapidFuzz near-duplicate removal
+│       ├── db.py                    # SQLite schema + helpers, run history
+│       ├── models.py                # TypedDicts (RawItem, ScoredTopic…)
+│       └── dedup.py                 # RapidFuzz near-duplicate removal
 ├── config/
-│   ├── .env.template               # API key template
-│   ├── rss_sources.csv             # 45 German RSS feeds with trust scores
-│   └── source_trust.csv            # MBFC domain trust database
-├── tests/                          # Mirrors src/ — run with pytest
-├── notebooks/                      # EDA, scoring validation, precision/recall
+│   ├── .env.template                # API key template
+│   ├── rss_sources.csv              # 45 curated German RSS feeds
+│   ├── source_trust.csv             # MBFC domain trust database (114 entries)
+│   └── searxng/settings.yml         # Self-hosted SearXNG config
+├── scripts/
+│   └── render_docs.py               # Regenerates the "Scoring formulas" section above
+├── tests/                           # Mirrors src/ — run with pytest
+├── notebooks/                       # EDA, scoring validation, precision/recall
 ├── data/
-│   ├── raw/                        # Scraped JSON dumps (gitignored)
-│   └── processed/                  # topics.db — clustered + scored output (gitignored)
+│   ├── dashboard.db                 # Full run history + live scores (gitignored)
+│   └── demo.db                      # Static sample DB for dashboard demo mode
 └── requirements.txt
 ```
 
 ---
 
-## RSS sources
+## RSS sources (curated fallback mode)
 
-The pipeline includes 45 curated German-language RSS feeds covering the DACH region:
+`config/rss_sources.csv` includes 45 curated German-language RSS feeds covering the DACH region:
 
 **High trust (≥ 80):** Tagesschau, DW Deutsch, ZDF heute, NDR, WDR, Süddeutsche Zeitung, FAZ, Die Zeit, NZZ, Der Standard, ORF
 
@@ -179,10 +218,11 @@ The pipeline includes 45 curated German-language RSS feeds covering the DACH reg
 
 | Layer | Tools |
 |-------|-------|
-| Data ingestion | `feedparser` (RSS), NewsAPI, Crawl4AI |
+| Discovery | SearXNG (self-hosted) / DuckDuckGo fallback, `feedparser` (RSS), NewsAPI, `trafilatura` (full-text) |
 | NLP | spaCy `de_core_news_lg`, HuggingFace `oliverguhr/german-sentiment-bert` |
-| Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
-| Scoring | scikit-learn, RapidFuzz, MBFC CSV |
+| Embeddings / NLI | `sentence-transformers/paraphrase-multilingual-mpnet-base-v2`, `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` |
+| Domain trust | MBFC CSV, Wikidata SPARQL, OpenPageRank, WHOIS (`python-whois`), SPF/DMARC (`dnspython`), Google Safe Browsing |
+| Scoring | scikit-learn, RapidFuzz |
 | Frontend | Streamlit, Plotly |
 | Storage | SQLite |
 
@@ -194,7 +234,7 @@ The pipeline includes 45 curated German-language RSS feeds covering the DACH reg
 python -m pytest tests/ -v
 ```
 
-Tests mirror `src/` structure and use in-memory SQLite fixtures. No real API calls are made during testing.
+Tests mirror `src/` structure and mock all external API calls — no real network requests are made during testing.
 
 ---
 
