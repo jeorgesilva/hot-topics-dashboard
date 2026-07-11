@@ -291,7 +291,7 @@ class TestComputeCoverageMetricsPlatformFilter:
         # Only reuters.com (newsapi) is included; reddit is excluded
         assert m["avg_trust"] == pytest.approx(94.0, abs=0.1)
 
-    def test_social_filter_includes_only_reddit(self, db_conn):
+    def test_filter_includes_only_reddit(self, db_conn):
         items = [
             _make_item("v2", "https://reuters.com/b", platform="newsapi"),
             _make_item("r2", "https://www.reddit.com/r/de/comments/y/", platform="reddit"),
@@ -344,7 +344,7 @@ class TestScoreCoverage:
         count = score_coverage(db_conn)
         assert count == 0
 
-    def test_writes_social_avg_trust_column(self, db_conn):
+    def test_excludes_reddit_from_verified_avg_trust(self, db_conn):
         items = [
             _make_item("n1", "https://reuters.com/c", platform="newsapi"),
             _make_item("s1", "https://www.reddit.com/r/de/comments/z/", platform="reddit"),
@@ -361,9 +361,7 @@ class TestScoreCoverage:
         with patch("src.scoring.source_trust._TRUST_DB", _SAMPLE_DB):
             score_coverage(db_conn)
         row = db_conn.execute(
-            "SELECT avg_trust, social_avg_trust, social_coverage_ratio FROM topic_scores WHERE topic_id = 10"
+            "SELECT avg_trust FROM topic_scores WHERE topic_id = 10"
         ).fetchone()
         assert row is not None
-        assert row["avg_trust"] is not None         # verified track (reuters only)
-        assert row["social_avg_trust"] is not None  # social track (reddit only)
-        assert row["social_coverage_ratio"] is not None
+        assert row["avg_trust"] is not None  # verified track (reuters only)

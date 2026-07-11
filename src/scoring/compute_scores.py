@@ -45,7 +45,6 @@ import logging
 from datetime import datetime, timezone
 import sqlite3
 
-from src.scoring.article_scorer import score_article
 from src.scoring.source_reliability import resolve_reliability
 from src.scoring.source_trust import _domain_from_url, score_coverage
 from src.scoring.weights import (
@@ -274,7 +273,7 @@ def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
 
 
 def compute_composite(conn: sqlite3.Connection) -> int:
-    """Fill the two-tier risk scores, social_risk, narrative_divergence, computed_at.
+    """Fill the two-tier risk scores and computed_at.
 
     A topic is skipped if avg_article_risk or framing_inconsistency is NULL,
     meaning run_nlp has not yet run for that topic.
@@ -289,12 +288,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
       overall_confidence     — compute_overall_confidence(evidence_coverage,
                                 average_source_confidence(topic_id)).
 
-    social_risk is computed from existing social-track signals (social_avg_trust,
-    social_avg_sentiment_extremity, social_sensationalism_avg,
-    social_attribution_vagueness) by deriving a social_avg_article_risk via
-    the article_scorer formula, then applying the linguistic-only formula.
-    narrative_divergence = |composite_risk - social_risk|.
-
     Args:
         conn: Active database connection.
 
@@ -305,11 +298,7 @@ def compute_composite(conn: sqlite3.Connection) -> int:
         """
         SELECT ts.topic_id,
                ts.avg_article_risk, ts.framing_inconsistency,
-               ts.coverage_ratio, ts.fact_inconsistency,
-               ts.social_avg_trust, ts.social_avg_sentiment_extremity,
-               ts.social_sensationalism_avg, ts.social_coverage_ratio,
-               ts.social_framing_inconsistency, ts.social_attribution_vagueness,
-               ts.social_fact_inconsistency
+               ts.coverage_ratio, ts.fact_inconsistency
         FROM topic_scores ts
         JOIN topics t ON t.id = ts.topic_id
         WHERE ts.avg_article_risk IS NOT NULL
@@ -340,28 +329,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
             avg_source_confidence=average_source_confidence(topic_id, conn),
         )
 
-        social_risk: float | None = None
-        if (
-            row["social_avg_sentiment_extremity"] is not None
-            and row["social_sensationalism_avg"] is not None
-            and row["social_framing_inconsistency"] is not None
-        ):
-            social_avg_article_risk = score_article(
-                trust_score=row["social_avg_trust"] or 50.0,
-                sentiment_extremity=row["social_avg_sentiment_extremity"],
-                sensationalism_score=row["social_sensationalism_avg"],
-                attribution_vagueness=row["social_attribution_vagueness"] or 0.0,
-            )
-            social_risk = compute_risk(
-                avg_article_risk=social_avg_article_risk,
-                framing_inconsistency=row["social_framing_inconsistency"],
-                fact_inconsistency=row["social_fact_inconsistency"] or 0.0,
-            )
-
-        divergence = (
-            round(abs(risk - social_risk), 6) if social_risk is not None else None
-        )
-
         conn.execute(
             """
             UPDATE topic_scores
@@ -370,8 +337,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
                 evidence_grounded_risk = ?,
                 evidence_coverage      = ?,
                 overall_confidence     = ?,
-                social_risk            = ?,
-                narrative_divergence   = ?,
                 computed_at            = ?
             WHERE topic_id = ?
             """,
@@ -381,8 +346,6 @@ def compute_composite(conn: sqlite3.Connection) -> int:
                 evidence_grounded_risk,
                 evidence_coverage,
                 overall_confidence,
-                round(social_risk, 6) if social_risk is not None else None,
-                divergence,
                 now,
                 topic_id,
             ),

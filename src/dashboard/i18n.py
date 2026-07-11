@@ -31,9 +31,6 @@ LABEL_ARTICLES = "Articles"
 LABEL_RISK = "Risk"
 LABEL_RELIABILITY = "Reliability"
 LABEL_UNSCORED = "unscored"
-LABEL_DIV_TOOLTIP = (
-    "Narrative Divergence: how strongly Reddit framing differs from verified sources"
-)
 
 CAPTION_PIPELINE_MISSING = (
     "No scored topics found at `{db_path}`.\n\n"
@@ -68,32 +65,6 @@ CAPTION_SCORED_AT = "scored {ts}"
 
 SECTION_SIGNAL_BREAKDOWN = "Signal Breakdown"
 SIGNAL_BREAKDOWN_CAPTION = "Hover over a card for a full explanation."
-
-SECTION_SOCIAL_TRACK = "Social Media Track (Reddit)"
-SOCIAL_NO_DATA = (
-    "No Reddit articles linked to this topic — social risk track unavailable. "
-    "Run the pipeline with Reddit enabled to populate this section."
-)
-
-METRIC_VERIFIED_RISK = "Verified Risk"
-METRIC_VERIFIED_RISK_HELP = "Composite risk from NewsAPI/RSS articles (journalistic sources)."
-METRIC_SOCIAL_RISK = "Social Risk"
-METRIC_SOCIAL_RISK_HELP = "Composite risk from Reddit posts about this topic."
-METRIC_NARRATIVE_DIV = "Narrative Divergence"
-METRIC_NARRATIVE_DIV_HELP = (
-    "Absolute difference between verified and social risk. "
-    "High divergence means Reddit discussions frame the topic very differently "
-    "from journalistic sources — a potential misinformation signal."
-)
-
-DIVERGENCE_HIGH = "high divergence — indicative of coordinated social amplification."
-DIVERGENCE_MED = "moderate divergence — social framing deviates from press coverage."
-DIVERGENCE_LOW = "low divergence — social and press coverage largely aligned."
-DIVERGENCE_PREFIX = "Narrative Divergence"
-DIVERGENCE_VS = "Verified risk {v:.1f} % vs. Social risk {s:.1f} %"
-
-CAPTION_SOCIAL_GRADE = "Social grade:"
-CAPTION_SOCIAL_BASED_ON = "Based on Reddit posts about this topic."
 
 SECTION_RISK_RADAR = "Risk Radar"
 RADAR_CHART_TITLE = "Risk Radar"
@@ -247,18 +218,6 @@ The **composite risk** (0–100 %) is a weighted sum of 3 signals:
 | ⚠️ Attribution Vagueness | 20 % | 8 % |
 
 A risk ≥ 50 % is flagged as a potential misinformation signal.
-"""
-
-EXPANDER_SOCIAL_TRACK = "ℹ️ What is the Social Media Track?"
-EXPANDER_SOCIAL_TRACK_TEXT = """\
-The **Social Media Track** scores Reddit posts separately from journalistic sources.
-
-- **Verified Risk** — computed from NewsAPI/RSS/Google News articles
-- **Social Risk** — computed from Reddit posts
-- **Narrative Divergence** — |verified − social risk|
-
-High divergence (≥ 30 %) can indicate coordinated social amplification or **narrative hijacking**:
-Reddit discussions frame the topic fundamentally differently from the press.
 """
 
 EXPANDER_DOMAIN_TRUST = "ℹ️ Where do trust scores come from?"

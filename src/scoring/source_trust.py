@@ -32,7 +32,6 @@ HIGH_TRUST_THRESHOLD: float = 60.0
 
 # Platform sets used by the two scoring tracks.
 VERIFIED_PLATFORMS: list[str] = ["newsapi", "rss", "google_news"]
-SOCIAL_PLATFORMS: list[str] = ["reddit"]
 
 # Scores assigned to domains absent from the trust DB.
 # A missing domain is more likely to be a shell/spam site than a neutral outlet,
@@ -148,8 +147,8 @@ def compute_coverage_metrics(
         neutral: Trust score assigned to unknown domains.
         high_trust_threshold: Minimum score to count as a credible source.
         platform_filter: When provided, only articles whose platform is in
-            this list are included (e.g. ["newsapi", "rss"] for verified
-            track, or ["reddit"] for the social track).
+            this list are included (e.g. ["newsapi", "rss"] for the
+            verified track).
 
     Returns:
         Dict with keys: avg_trust, trust_variance, coverage_breadth,
@@ -217,11 +216,10 @@ def compute_coverage_metrics(
 
 
 def score_coverage(conn: sqlite3.Connection) -> int:
-    """Compute and persist coverage metrics for every topic — both tracks.
+    """Compute and persist coverage metrics for every topic.
 
     Verified track (newsapi/rss/google_news) → avg_trust, trust_variance,
     coverage_breadth, coverage_ratio.
-    Social track (reddit) → social_avg_trust, social_coverage_ratio.
 
     Args:
         conn: Active database connection.
@@ -242,22 +240,16 @@ def score_coverage(conn: sqlite3.Connection) -> int:
         verified = compute_coverage_metrics(
             topic_id, conn, platform_filter=VERIFIED_PLATFORMS
         )
-        social = compute_coverage_metrics(
-            topic_id, conn, platform_filter=SOCIAL_PLATFORMS
-        )
         conn.execute(
             """
             INSERT INTO topic_scores
-                (topic_id, avg_trust, trust_variance, coverage_breadth, coverage_ratio,
-                 social_avg_trust, social_coverage_ratio)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (topic_id, avg_trust, trust_variance, coverage_breadth, coverage_ratio)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(topic_id) DO UPDATE SET
                 avg_trust            = excluded.avg_trust,
                 trust_variance       = excluded.trust_variance,
                 coverage_breadth     = excluded.coverage_breadth,
-                coverage_ratio       = excluded.coverage_ratio,
-                social_avg_trust     = excluded.social_avg_trust,
-                social_coverage_ratio = excluded.social_coverage_ratio
+                coverage_ratio       = excluded.coverage_ratio
             """,
             (
                 topic_id,
@@ -265,8 +257,6 @@ def score_coverage(conn: sqlite3.Connection) -> int:
                 verified["trust_variance"],
                 verified["coverage_breadth"],
                 verified["coverage_ratio"],
-                social["avg_trust"],
-                social["coverage_ratio"],
             ),
         )
 
