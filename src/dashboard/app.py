@@ -109,15 +109,6 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 ts.evidence_coverage,
                 ts.overall_confidence,
                 ts.computed_at,
-                ts.social_avg_trust,
-                ts.social_coverage_ratio,
-                ts.social_avg_sentiment_extremity,
-                ts.social_sensationalism_avg,
-                ts.social_framing_inconsistency,
-                ts.social_attribution_vagueness,
-                ts.social_fact_inconsistency,
-                ts.social_risk,
-                ts.narrative_divergence,
                 (SELECT GROUP_CONCAT(DISTINCT ri.platform)
                  FROM topic_sources ts2
                  JOIN raw_items ri ON ri.id = ts2.item_id

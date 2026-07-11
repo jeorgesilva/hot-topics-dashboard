@@ -154,6 +154,9 @@ def init_db(
             fact_inconsistency      REAL,
             composite_risk          REAL,
             computed_at             TEXT,
+            -- Deprecated (Fase 8): social_*/narrative_divergence were reserved for a
+            -- Reddit track that no scraper ever populated. Columns kept for existing
+            -- DBs but no longer written or read by the application.
             social_avg_trust               REAL,
             social_coverage_ratio          REAL,
             social_avg_sentiment_extremity REAL,
@@ -232,6 +235,8 @@ def init_db(
     for col, type_ in [
         ("attribution_vagueness",          "REAL"),
         ("fact_inconsistency",             "REAL"),
+        # Deprecated (Fase 8): kept so ALTER TABLE remains idempotent for DBs
+        # created before this migration existed. No longer written or read.
         ("social_avg_trust",               "REAL"),
         ("social_coverage_ratio",          "REAL"),
         ("social_avg_sentiment_extremity", "REAL"),

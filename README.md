@@ -1,6 +1,6 @@
 # Hot Topics — Misinformation Risk Dashboard
 
-Real-time dashboard that monitors trending German-language topics across Reddit, curated RSS feeds, and NewsAPI — then scores each topic's misinformation risk using NLP-based analysis.
+Real-time dashboard that monitors trending German-language topics across curated RSS feeds and NewsAPI — then scores each topic's misinformation risk using NLP-based analysis.
 
 The dashboard is entirely in German and targets the DACH media landscape.
 
@@ -8,12 +8,11 @@ The dashboard is entirely in German and targets the DACH media landscape.
 
 ## Features
 
-- **Dual-source pipeline** — aggregates verified journalism (45+ curated German RSS feeds) and social media (Reddit) into a unified topic model
+- **Multi-source pipeline** — aggregates verified journalism from 45+ curated German RSS feeds and NewsAPI into a unified topic model
 - **7-signal risk scoring** — each topic gets a composite risk score built from source trustworthiness, sentiment extremity, coverage breadth, framing divergence, sensationalism, attribution vagueness, and fact inconsistency
-- **Two-track analysis** — `composite_risk` (journalistic sources only) and `social_risk` (Reddit only) are scored separately, and `narrative_divergence` = |composite − social| surfaces topics where Reddit amplifies or distorts the journalistic framing
 - **Framing inconsistency** — cosine distance between multilingual sentence embeddings of high-trust vs. low-trust source tiers detects narrative divergence at the NLP level
 - **Domain trust resolver** — MBFC-curated CSV → TLD heuristic fallback → default; scores every domain 0–100
-- **Interactive Streamlit dashboard** — risk radar, waterfall contribution chart, domain trust bar, per-article signal gauges, social-media track panel
+- **Interactive Streamlit dashboard** — risk radar, waterfall contribution chart, domain trust bar, per-article signal gauges
 
 ---
 
@@ -21,11 +20,10 @@ The dashboard is entirely in German and targets the DACH media landscape.
 
 ```
 RSS feeds (45 sources)  ──┐
-Reddit (5 subreddits)   ──┤  run_all.py   → topics.db (raw + clustered)
-NewsAPI (German news)   ──┘
+NewsAPI (German news)   ──┘  run_all.py   → topics.db (raw + clustered)
 
 topics.db  →  run_nlp.py        → NLP scores per topic (sentiment, framing, attribution…)
-           →  compute_scores.py → composite_risk, social_risk, narrative_divergence
+           →  compute_scores.py → composite_risk
            →  app.py            → Streamlit dashboard
 ```
 
@@ -49,11 +47,9 @@ python -m spacy download de_core_news_lg   # German NLP model (required)
 ```bash
 cp config/.env.template .env
 # Edit .env — minimum required: NEWSAPI_KEY (free tier at https://newsapi.org/register)
-# Optional: REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET for live Reddit scraping
 ```
 
-> **Note:** Without a Reddit API key the pipeline still runs using the RSS pool.
-> Without `NEWSAPI_KEY` you can pass `--no-newsapi` to use the RSS pool only.
+> **Note:** Without `NEWSAPI_KEY` you can pass `--no-newsapi` to use the RSS pool only.
 
 ### 3. Run the pipeline
 
@@ -63,7 +59,7 @@ python -m src.scrapers.run_all
 
 # (optional flags)
 python -m src.scrapers.run_all --target-topics 5 --articles-per-topic 20
-python -m src.scrapers.run_all --no-newsapi   # RSS + Reddit only (no API quota used)
+python -m src.scrapers.run_all --no-newsapi   # RSS only (no API quota used)
 
 # Step 2 — NLP scoring
 python -m src.scoring.run_nlp
@@ -82,7 +78,7 @@ streamlit run src/dashboard/app.py
 | View | URL param | What it shows |
 |------|-----------|---------------|
 | Home | `?view=home` | Topic ranking table, sentiment vs. sensationalism scatter, composite risk bar chart, expander with scoring methodology |
-| Topic detail | `?view=topic&topic_id=N` | Risk radar, signal waterfall, social-media track (Reddit vs. journalism), domain trust bar, article list |
+| Topic detail | `?view=topic&topic_id=N` | Risk radar, signal waterfall, domain trust bar, article list |
 | Article detail | `?view=article&item_id=X` | Per-article signal gauges (sensationalism, attribution vagueness, clickbait density, caps ratio), full text |
 
 ---
@@ -119,8 +115,6 @@ composite_risk = evidence_grounded_risk  if evidence_coverage > 0.30 (30 %)
 Weights and thresholds are defined once in `src/scoring/weights.py` and this section is generated from that file by `scripts/render_docs.py` — do not hand-edit the numbers above.
 <!-- END AUTO-GENERATED: scoring formulas -->
 
-> TODO(fase-8): `social_risk` is computed with this same composite formula against a "social media / Reddit" track, but no scraper currently populates the `social_*` signals it reads from — `social_risk` and `narrative_divergence` are always `NULL` in practice. The "Two-track analysis" and Reddit-related copy elsewhere in this README describes that track as if it were live; leaving it as-is pending the Fase 8 decision (remove vs. reconceptualize) rather than rewriting it here.
-
 ---
 
 ## Project structure
@@ -129,10 +123,9 @@ Weights and thresholds are defined once in `src/scoring/weights.py` and this sec
 hot-topics-dashboard/
 ├── src/
 │   ├── scrapers/
-│   │   ├── run_all.py              # Orchestrator (RSS → NewsAPI → Reddit → cluster)
+│   │   ├── run_all.py              # Orchestrator (RSS → NewsAPI → cluster)
 │   │   ├── rss_scraper.py          # 45 curated German RSS feeds
 │   │   ├── newsapi_scraper.py      # NewsAPI (German, 100 req/day free)
-│   │   ├── reddit_scraper.py       # PRAW scraper (r/de, r/germany, r/nachrichten…)
 │   │   ├── google_rss_scraper.py   # Google News RSS fallback
 │   │   └── article_fetcher.py      # Full-text fetch for RSS items
 │   ├── nlp/
@@ -141,7 +134,7 @@ hot-topics-dashboard/
 │   │   ├── sentiment.py            # HuggingFace german-sentiment-bert
 │   │   └── keywords.py             # Topic keyword extraction
 │   ├── scoring/
-│   │   ├── run_nlp.py              # NLP scoring orchestrator (verified + social tracks)
+│   │   ├── run_nlp.py              # NLP scoring orchestrator
 │   │   ├── compute_scores.py       # Composite risk aggregator
 │   │   ├── source_trust.py         # MBFC CSV loader, domain trust scorer, coverage metrics
 │   │   ├── domain_resolver.py      # TLD heuristic fallback + SQLite cache
@@ -186,7 +179,7 @@ The pipeline includes 45 curated German-language RSS feeds covering the DACH reg
 
 | Layer | Tools |
 |-------|-------|
-| Data ingestion | `feedparser` (RSS), PRAW (Reddit), NewsAPI, Crawl4AI |
+| Data ingestion | `feedparser` (RSS), NewsAPI, Crawl4AI |
 | NLP | spaCy `de_core_news_lg`, HuggingFace `oliverguhr/german-sentiment-bert` |
 | Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | Scoring | scikit-learn, RapidFuzz, MBFC CSV |
