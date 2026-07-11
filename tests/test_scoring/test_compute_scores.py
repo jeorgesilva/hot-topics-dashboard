@@ -13,11 +13,20 @@ from src.scoring.article_scorer import score_article
 from src.scoring.compute_scores import (
     _MISINFO_THRESHOLD,
     _WEIGHTS,
+    average_source_confidence,
     compute_composite,
+    compute_evidence_signals,
+    compute_overall_confidence,
+    compute_overall_risk,
     compute_risk,
     explain_score,
     grade_topic,
     score_all_topics,
+)
+from src.scoring.weights import (
+    CONFIDENCE_BAND_HIGH,
+    CONFIDENCE_BAND_MEDIUM,
+    EVIDENCE_COVERAGE_THRESHOLD,
 )
 from src.utils.db import init_db, insert_items
 from src.utils.models import RawItem
@@ -67,6 +76,20 @@ def _seed_topic(conn, topic_id: int, item_ids: list[str], **score_kwargs) -> Non
             )
 
 
+def _seed_claim(
+    conn, topic_id: int, item_id: str, verdict: str, confidence: float = 0.9
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO claim_verifications
+            (topic_id, item_id, claim_text, verdict, evidence_url, evidence_snippet, confidence, checked_at)
+        VALUES (?, ?, 'claim', ?, 'https://x.example', 'evidence', ?, '2026-05-19T00:00:00Z')
+        """,
+        (topic_id, item_id, verdict, confidence),
+    )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # compute_risk formula
 # ---------------------------------------------------------------------------
@@ -110,6 +133,135 @@ class TestComputeRisk:
         high = compute_risk(avg_article_risk=0.9, framing_inconsistency=0.3,
                             fact_inconsistency=0.1)
         assert high > low
+
+
+# ---------------------------------------------------------------------------
+# compute_evidence_signals
+# ---------------------------------------------------------------------------
+
+class TestComputeEvidenceSignals:
+    def test_no_claims_returns_none_and_zero_coverage(self, db_conn):
+        insert_items(db_conn, [_make_item("ev0")])
+        _seed_topic(db_conn, 0, ["ev0"])
+        risk, coverage = compute_evidence_signals(0, db_conn)
+        assert risk is None
+        assert coverage == 0.0
+
+    def test_only_not_enough_evidence_returns_none_risk_but_counts_coverage(self, db_conn):
+        insert_items(db_conn, [_make_item("ev1")])
+        _seed_topic(db_conn, 1, ["ev1"])
+        _seed_claim(db_conn, 1, "ev1", "not_enough_evidence")
+        risk, coverage = compute_evidence_signals(1, db_conn)
+        assert risk is None
+        assert coverage == 0.0
+
+    def test_all_supported_gives_zero_risk_full_coverage(self, db_conn):
+        insert_items(db_conn, [_make_item("ev2")])
+        _seed_topic(db_conn, 2, ["ev2"])
+        _seed_claim(db_conn, 2, "ev2", "supported")
+        _seed_claim(db_conn, 2, "ev2", "supported")
+        risk, coverage = compute_evidence_signals(2, db_conn)
+        assert risk == 0.0
+        assert coverage == 1.0
+
+    def test_all_refuted_gives_full_risk(self, db_conn):
+        insert_items(db_conn, [_make_item("ev3")])
+        _seed_topic(db_conn, 3, ["ev3"])
+        _seed_claim(db_conn, 3, "ev3", "refuted")
+        risk, coverage = compute_evidence_signals(3, db_conn)
+        assert risk == 1.0
+        assert coverage == 1.0
+
+    def test_mixed_verdicts_computed_correctly(self, db_conn):
+        insert_items(db_conn, [_make_item("ev4")])
+        _seed_topic(db_conn, 4, ["ev4"])
+        _seed_claim(db_conn, 4, "ev4", "supported")
+        _seed_claim(db_conn, 4, "ev4", "refuted")
+        _seed_claim(db_conn, 4, "ev4", "not_enough_evidence")
+        risk, coverage = compute_evidence_signals(4, db_conn)
+        assert risk == pytest.approx(0.5)  # 1 refuted / 2 decided
+        assert coverage == pytest.approx(2 / 3, abs=1e-4)  # 2 decided / 3 total
+
+    def test_only_scoped_to_requested_topic(self, db_conn):
+        insert_items(db_conn, [_make_item("ev5"), _make_item("ev6")])
+        _seed_topic(db_conn, 5, ["ev5"])
+        _seed_topic(db_conn, 6, ["ev6"])
+        _seed_claim(db_conn, 5, "ev5", "refuted")
+        _seed_claim(db_conn, 6, "ev6", "supported")
+        risk5, _ = compute_evidence_signals(5, db_conn)
+        risk6, _ = compute_evidence_signals(6, db_conn)
+        assert risk5 == 1.0
+        assert risk6 == 0.0
+
+
+# ---------------------------------------------------------------------------
+# compute_overall_risk
+# ---------------------------------------------------------------------------
+
+class TestComputeOverallRisk:
+    def test_uses_linguistic_when_no_evidence(self):
+        risk = compute_overall_risk(
+            linguistic_only_risk=0.4, evidence_grounded_risk=None, evidence_coverage=0.0
+        )
+        assert risk == 0.4
+
+    def test_uses_linguistic_when_coverage_at_or_below_threshold(self):
+        risk = compute_overall_risk(
+            linguistic_only_risk=0.4,
+            evidence_grounded_risk=0.9,
+            evidence_coverage=EVIDENCE_COVERAGE_THRESHOLD,
+        )
+        assert risk == 0.4
+
+    def test_uses_evidence_when_coverage_above_threshold(self):
+        risk = compute_overall_risk(
+            linguistic_only_risk=0.4,
+            evidence_grounded_risk=0.9,
+            evidence_coverage=EVIDENCE_COVERAGE_THRESHOLD + 0.01,
+        )
+        assert risk == 0.9
+
+
+# ---------------------------------------------------------------------------
+# average_source_confidence
+# ---------------------------------------------------------------------------
+
+class TestAverageSourceConfidence:
+    def test_none_when_no_articles(self, db_conn):
+        insert_items(db_conn, [])
+        _seed_topic(db_conn, 0, [])
+        assert average_source_confidence(0, db_conn) is None
+
+    def test_known_domain_yields_a_confidence(self, db_conn):
+        insert_items(db_conn, [_make_item("as1")])  # reuters.com — verified CSV entry
+        _seed_topic(db_conn, 1, ["as1"])
+        confidence = average_source_confidence(1, db_conn)
+        assert confidence is not None
+        assert 0.0 <= confidence <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# compute_overall_confidence
+# ---------------------------------------------------------------------------
+
+class TestComputeOverallConfidence:
+    def test_high_coverage_and_source_confidence_is_high(self):
+        assert compute_overall_confidence(1.0, 1.0) == "high"
+        assert CONFIDENCE_BAND_HIGH <= 1.0
+
+    def test_zero_coverage_and_no_source_signal_is_low(self):
+        assert compute_overall_confidence(0.0, 0.1) == "low"
+
+    def test_no_source_confidence_falls_back_to_coverage_alone(self):
+        assert compute_overall_confidence(0.9, None) == "high"
+        assert compute_overall_confidence(0.1, None) == "low"
+
+    def test_band_boundaries(self):
+        assert compute_overall_confidence(CONFIDENCE_BAND_HIGH, CONFIDENCE_BAND_HIGH) == "high"
+        just_below_high = CONFIDENCE_BAND_HIGH - 0.01
+        assert compute_overall_confidence(just_below_high, just_below_high) == "medium"
+        just_below_medium = CONFIDENCE_BAND_MEDIUM - 0.01
+        assert compute_overall_confidence(just_below_medium, just_below_medium) == "low"
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +354,41 @@ class TestComputeComposite:
         ).fetchone()
         assert row["composite_risk"] is not None
         assert 0.0 <= row["composite_risk"] <= 1.0
+
+    def test_fills_two_tier_columns_with_no_claims(self, db_conn):
+        insert_items(db_conn, [_make_item("c1b")])
+        _seed_topic(db_conn, 0, ["c1b"],
+                    avg_article_risk=0.2, framing_inconsistency=0.1,
+                    coverage_ratio=0.8)
+        compute_composite(db_conn)
+        row = db_conn.execute(
+            "SELECT linguistic_only_risk, evidence_grounded_risk, evidence_coverage, "
+            "overall_confidence, composite_risk FROM topic_scores WHERE topic_id = 0"
+        ).fetchone()
+        # No claim_verifications rows → composite_risk falls back to linguistic_only_risk.
+        assert row["linguistic_only_risk"] == pytest.approx(row["composite_risk"])
+        assert row["evidence_grounded_risk"] is None
+        assert row["evidence_coverage"] == 0.0
+        assert row["overall_confidence"] in {"high", "medium", "low"}
+
+    def test_high_coverage_claims_drive_composite_risk(self, db_conn):
+        insert_items(db_conn, [_make_item("c1c")])
+        _seed_topic(db_conn, 0, ["c1c"],
+                    avg_article_risk=0.05, framing_inconsistency=0.05,
+                    coverage_ratio=0.8)
+        for i in range(5):
+            _seed_claim(db_conn, 0, "c1c", "refuted")
+        compute_composite(db_conn)
+        row = db_conn.execute(
+            "SELECT linguistic_only_risk, evidence_grounded_risk, evidence_coverage, "
+            "composite_risk FROM topic_scores WHERE topic_id = 0"
+        ).fetchone()
+        assert row["evidence_coverage"] == 1.0
+        assert row["evidence_grounded_risk"] == 1.0
+        # Low linguistic risk but unanimous refuted verdicts — composite_risk
+        # should follow the evidence tier, not the linguistic one.
+        assert row["composite_risk"] == pytest.approx(1.0)
+        assert row["composite_risk"] > row["linguistic_only_risk"]
 
     def test_skips_topics_missing_avg_article_risk(self, db_conn):
         insert_items(db_conn, [_make_item("c2")])

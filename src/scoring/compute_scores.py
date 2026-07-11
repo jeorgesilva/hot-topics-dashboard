@@ -1,10 +1,31 @@
-"""Topic-level composite risk scorer.
+"""Topic-level two-tier risk scorer (Fase 7).
 
-Aggregates per-article risk (from article_scorer.py) and group-level NLP
-signals into a single composite_risk score (0–1) per topic, then maps it
-to a reliability grade (A–F).
+Computes two independent per-topic risk numbers instead of blending
+everything into one:
 
-Formula (weights from src/scoring/weights.py::COMPOSITE_RISK_WEIGHTS, sum to 1.0):
+  linguistic_only_risk   — the "old" composite formula (sensationalism,
+                            attribution vagueness, framing divergence,
+                            NLI fact_inconsistency). Always computable once
+                            run_nlp has scored a topic; evidence-independent.
+  evidence_grounded_risk — fraction of RAG-verified claims (Fase 5,
+                            claim_verifications) that were "refuted" among
+                            claims with a definite verdict (supported ∪
+                            refuted — excludes not_enough_evidence). NULL
+                            when the topic has zero claims with a verdict.
+  evidence_coverage      — fraction of the topic's checked claims that had a
+                            definite verdict (i.e. were NOT not_enough_evidence).
+  overall_confidence     — 'high' / 'medium' / 'low', derived from
+                            evidence_coverage and the Fase 6 source-reliability
+                            confidence of the topic's article domains.
+
+`topic_scores.composite_risk` remains the single sortable/flaggable number
+(dashboard ranking, misinformation banner, and the History queries in
+CLAUDE.md), but its derivation is now an explicit, documented combination
+rule (compute_overall_risk) instead of an implicit blend — see
+src/scoring/weights.py::EVIDENCE_COVERAGE_THRESHOLD.
+
+linguistic_only_risk formula (weights from
+src/scoring/weights.py::COMPOSITE_RISK_WEIGHTS, sum to 1.0):
     risk = avg_article_risk * w["avg_article_risk"]            ← bundles source trust,
                                                                    sentiment, sensationalism,
                                                                    attribution vagueness
@@ -25,7 +46,13 @@ from datetime import datetime, timezone
 import sqlite3
 
 from src.scoring.article_scorer import score_article
-from src.scoring.source_trust import score_coverage
+from src.scoring.source_reliability import resolve_reliability
+from src.scoring.source_trust import _domain_from_url, score_coverage
+from src.scoring.weights import (
+    CONFIDENCE_BAND_HIGH,
+    CONFIDENCE_BAND_MEDIUM,
+    EVIDENCE_COVERAGE_THRESHOLD,
+)
 from src.scoring.weights import COMPOSITE_RISK_WEIGHTS as _WEIGHTS
 from src.utils.db import init_db
 
@@ -63,6 +90,125 @@ def compute_risk(
     )
 
 
+def compute_evidence_signals(
+    topic_id: int, conn: sqlite3.Connection
+) -> tuple[float | None, float]:
+    """Derive evidence_grounded_risk and evidence_coverage from claim_verifications.
+
+    Args:
+        topic_id: ID of the topic in the topics table.
+        conn: Active database connection.
+
+    Returns:
+        (evidence_grounded_risk, evidence_coverage). evidence_grounded_risk is
+        the fraction of claims with a definite verdict (supported ∪ refuted)
+        that were refuted; None when the topic has no claims with a definite
+        verdict (including when it has zero claims at all).
+        evidence_coverage is the fraction of all checked claims that had a
+        definite verdict (0.0 when the topic has zero claims).
+    """
+    rows = conn.execute(
+        "SELECT verdict FROM claim_verifications WHERE topic_id = ?", (topic_id,)
+    ).fetchall()
+    total = len(rows)
+    if total == 0:
+        return None, 0.0
+
+    verdicts = [row["verdict"] for row in rows]
+    decided = [v for v in verdicts if v != "not_enough_evidence"]
+    coverage = len(decided) / total
+
+    if not decided:
+        return None, round(coverage, 4)
+
+    refuted = sum(1 for v in decided if v == "refuted")
+    return round(refuted / len(decided), 4), round(coverage, 4)
+
+
+def compute_overall_risk(
+    linguistic_only_risk: float,
+    evidence_grounded_risk: float | None,
+    evidence_coverage: float,
+) -> float:
+    """Combine the two risk tiers into the single sortable/flaggable number.
+
+    Explicit combination rule (src/scoring/weights.py::EVIDENCE_COVERAGE_THRESHOLD):
+    use evidence_grounded_risk once enough claims have a definite verdict to
+    trust it over the linguistic-only signal; otherwise fall back to
+    linguistic_only_risk.
+
+    Args:
+        linguistic_only_risk: Always-available linguistic risk in [0, 1].
+        evidence_grounded_risk: Evidence-grounded risk in [0, 1], or None.
+        evidence_coverage: Fraction of checked claims with a definite verdict.
+
+    Returns:
+        The combined risk in [0.0, 1.0].
+    """
+    if evidence_grounded_risk is not None and evidence_coverage > EVIDENCE_COVERAGE_THRESHOLD:
+        return evidence_grounded_risk
+    return linguistic_only_risk
+
+
+def average_source_confidence(topic_id: int, conn: sqlite3.Connection) -> float | None:
+    """Mean Fase 6 resolve_reliability() confidence across a topic's article domains.
+
+    Args:
+        topic_id: ID of the topic in the topics table.
+        conn: Active database connection.
+
+    Returns:
+        Mean confidence in [0, 1], or None if the topic has no articles.
+    """
+    rows = conn.execute(
+        """
+        SELECT ri.url, ri.source
+        FROM topic_sources ts
+        JOIN raw_items ri ON ri.id = ts.item_id
+        WHERE ts.topic_id = ?
+        """,
+        (topic_id,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    confidences = []
+    for row in rows:
+        domain = _domain_from_url(row["url"]) or row["source"]
+        confidences.append(resolve_reliability(domain, conn)["confidence"])
+
+    return sum(confidences) / len(confidences)
+
+
+def compute_overall_confidence(
+    evidence_coverage: float, avg_source_confidence: float | None
+) -> str:
+    """Map combined evidence + source-reliability confidence to a display band.
+
+    Averages evidence_coverage (how many claims got a definite verdict) with
+    the topic's mean Fase 6 source-reliability confidence, then buckets the
+    result via src/scoring/weights.py::CONFIDENCE_BAND_HIGH/MEDIUM.
+
+    Args:
+        evidence_coverage: Fraction of checked claims with a definite verdict.
+        avg_source_confidence: Mean resolve_reliability() confidence across
+            the topic's article domains, or None if unavailable.
+
+    Returns:
+        'high', 'medium', or 'low'.
+    """
+    combined = (
+        evidence_coverage
+        if avg_source_confidence is None
+        else (evidence_coverage + avg_source_confidence) / 2.0
+    )
+    if combined >= CONFIDENCE_BAND_HIGH:
+        return "high"
+    if combined >= CONFIDENCE_BAND_MEDIUM:
+        return "medium"
+    return "low"
+
+
 def grade_topic(risk: float) -> str:
     """Map a composite risk score to a reliability grade.
 
@@ -87,17 +233,20 @@ def grade_topic(risk: float) -> str:
 def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
     """Return a per-signal contribution breakdown for a scored topic.
 
-    Shows each signal's weighted contribution to composite_risk so the
-    dashboard can explain why a topic was flagged.
+    Shows each linguistic signal's weighted contribution to
+    linguistic_only_risk so the dashboard can explain why a topic was
+    flagged, alongside the evidence-grounded tier and the combined
+    composite_risk / grade.
 
     Args:
         topic_id: ID of an already-scored topic.
         conn: Active database connection with row_factory=sqlite3.Row.
 
     Returns:
-        Dict with keys: topic_id, composite_risk, grade, and a
-        'contributions' sub-dict showing each signal's weighted value.
-        Returns an empty dict if the topic has not been scored yet.
+        Dict with keys: topic_id, composite_risk, grade, linguistic_only_risk,
+        evidence_grounded_risk, evidence_coverage, overall_confidence, and a
+        'contributions' sub-dict showing each linguistic signal's weighted
+        value. Returns an empty dict if the topic has not been scored yet.
     """
     row = conn.execute(
         "SELECT * FROM topic_scores WHERE topic_id = ?", (topic_id,)
@@ -113,23 +262,37 @@ def explain_score(topic_id: int, conn: sqlite3.Connection) -> dict:
         "fact_inconsistency":    round(_WEIGHTS["fact_inconsistency"] * (r["fact_inconsistency"] or 0.0), 4),
     }
     return {
-        "topic_id":       topic_id,
-        "composite_risk": round(r["composite_risk"], 4),
-        "grade":          grade_topic(r["composite_risk"]),
-        "contributions":  contributions,
+        "topic_id":               topic_id,
+        "composite_risk":         round(r["composite_risk"], 4),
+        "grade":                  grade_topic(r["composite_risk"]),
+        "linguistic_only_risk":   r["linguistic_only_risk"],
+        "evidence_grounded_risk": r["evidence_grounded_risk"],
+        "evidence_coverage":      r["evidence_coverage"],
+        "overall_confidence":     r["overall_confidence"],
+        "contributions":          contributions,
     }
 
 
 def compute_composite(conn: sqlite3.Connection) -> int:
-    """Fill composite_risk, social_risk, narrative_divergence, and computed_at.
+    """Fill the two-tier risk scores, social_risk, narrative_divergence, computed_at.
 
     A topic is skipped if avg_article_risk or framing_inconsistency is NULL,
     meaning run_nlp has not yet run for that topic.
 
+    Two-tier scoring (Fase 7):
+      linguistic_only_risk   — the "old" composite formula (compute_risk).
+      evidence_grounded_risk — from claim_verifications (compute_evidence_signals).
+      evidence_coverage      — fraction of checked claims with a definite verdict.
+      composite_risk         — combine_overall_risk(linguistic_only_risk,
+                                evidence_grounded_risk, evidence_coverage):
+                                the single sortable/flaggable number.
+      overall_confidence     — compute_overall_confidence(evidence_coverage,
+                                average_source_confidence(topic_id)).
+
     social_risk is computed from existing social-track signals (social_avg_trust,
     social_avg_sentiment_extremity, social_sensationalism_avg,
     social_attribution_vagueness) by deriving a social_avg_article_risk via
-    the article_scorer formula, then applying the same composite formula.
+    the article_scorer formula, then applying the linguistic-only formula.
     narrative_divergence = |composite_risk - social_risk|.
 
     Args:
@@ -159,10 +322,22 @@ def compute_composite(conn: sqlite3.Connection) -> int:
     scored = 0
 
     for row in rows:
-        risk = compute_risk(
+        topic_id = row["topic_id"]
+
+        linguistic_only_risk = compute_risk(
             avg_article_risk=row["avg_article_risk"],
             framing_inconsistency=row["framing_inconsistency"],
             fact_inconsistency=row["fact_inconsistency"] or 0.0,
+        )
+        evidence_grounded_risk, evidence_coverage = compute_evidence_signals(topic_id, conn)
+        risk = compute_overall_risk(
+            linguistic_only_risk=linguistic_only_risk,
+            evidence_grounded_risk=evidence_grounded_risk,
+            evidence_coverage=evidence_coverage,
+        )
+        overall_confidence = compute_overall_confidence(
+            evidence_coverage=evidence_coverage,
+            avg_source_confidence=average_source_confidence(topic_id, conn),
         )
 
         social_risk: float | None = None
@@ -190,18 +365,26 @@ def compute_composite(conn: sqlite3.Connection) -> int:
         conn.execute(
             """
             UPDATE topic_scores
-            SET composite_risk       = ?,
-                social_risk          = ?,
-                narrative_divergence = ?,
-                computed_at          = ?
+            SET composite_risk         = ?,
+                linguistic_only_risk   = ?,
+                evidence_grounded_risk = ?,
+                evidence_coverage      = ?,
+                overall_confidence     = ?,
+                social_risk            = ?,
+                narrative_divergence   = ?,
+                computed_at            = ?
             WHERE topic_id = ?
             """,
             (
                 round(risk, 6),
+                round(linguistic_only_risk, 6),
+                evidence_grounded_risk,
+                evidence_coverage,
+                overall_confidence,
                 round(social_risk, 6) if social_risk is not None else None,
                 divergence,
                 now,
-                row["topic_id"],
+                topic_id,
             ),
         )
         scored += 1

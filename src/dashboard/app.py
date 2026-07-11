@@ -102,7 +102,12 @@ def load_scored_topics(db_path: str) -> pd.DataFrame:
                 ts.coverage_ratio,
                 ts.attribution_vagueness,
                 ts.fact_inconsistency,
+                ts.avg_article_risk,
                 ts.composite_risk,
+                ts.linguistic_only_risk,
+                ts.evidence_grounded_risk,
+                ts.evidence_coverage,
+                ts.overall_confidence,
                 ts.computed_at,
                 ts.social_avg_trust,
                 ts.social_coverage_ratio,
@@ -235,6 +240,48 @@ def load_article(db_path: str, item_id: str) -> dict | None:
     return d
 
 
+@st.cache_data(ttl=60)
+def load_topic_claims(db_path: str, topic_id: int) -> list[dict]:
+    """Load all verified claims (Fase 5) for a topic's articles, most recent first."""
+    try:
+        conn = init_db(db_path)
+        rows = conn.execute(
+            """
+            SELECT cv.claim_text, cv.verdict, cv.evidence_url, cv.evidence_snippet,
+                   cv.confidence, cv.checked_at, cv.item_id, ri.title AS article_title
+            FROM claim_verifications cv
+            LEFT JOIN raw_items ri ON ri.id = cv.item_id
+            WHERE cv.topic_id = ?
+            ORDER BY cv.checked_at DESC
+            """,
+            (topic_id,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+
+@st.cache_data(ttl=60)
+def load_article_claims(db_path: str, item_id: str) -> list[dict]:
+    """Load verified claims (Fase 5) extracted from a single article."""
+    try:
+        conn = init_db(db_path)
+        rows = conn.execute(
+            """
+            SELECT claim_text, verdict, evidence_url, evidence_snippet, confidence, checked_at
+            FROM claim_verifications
+            WHERE item_id = ?
+            ORDER BY checked_at DESC
+            """,
+            (item_id,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _truncate(label: str, n: int = 55) -> str:
@@ -289,6 +336,121 @@ def _risk_badge_html(risk: float) -> str:
         f"<span style='background:{colour};color:#fff;padding:2px 8px;"
         f"border-radius:4px;font-size:0.85em'>{risk:.3f}</span>"
     )
+
+
+_CONFIDENCE_COLOURS: dict[str, str] = {
+    "high": "#2ecc71",
+    "medium": "#f1c40f",
+    "low": "#e74c3c",
+}
+
+_VERDICT_COLOURS: dict[str, str] = {
+    "supported": "#2ecc71",
+    "refuted": "#e74c3c",
+    "not_enough_evidence": "#888",
+}
+
+
+def _confidence_badge_html(confidence: str | None) -> str:
+    colour = _CONFIDENCE_COLOURS.get(confidence or "", "#888")
+    label = i18n.CONFIDENCE_LABELS.get(confidence or "", i18n.EVIDENCE_UNSCORED)
+    return (
+        f"<span style='background:{colour};color:#000;padding:2px 8px;"
+        f"border-radius:4px;font-size:0.8em;font-weight:bold'>{label}</span>"
+    )
+
+
+# ── two-tier risk (Fase 7) ──────────────────────────────────────────────────────
+
+def _render_two_tier_score(row: "pd.Series | dict") -> None:
+    """Show linguistic-only vs. evidence-grounded risk side by side, plus confidence."""
+    linguistic = row.get("linguistic_only_risk")
+    evidence = row.get("evidence_grounded_risk")
+    coverage = row.get("evidence_coverage")
+    confidence = row.get("overall_confidence")
+
+    linguistic = None if pd.isna(linguistic) else float(linguistic)
+    evidence = None if evidence is None or pd.isna(evidence) else float(evidence)
+    coverage = 0.0 if coverage is None or pd.isna(coverage) else float(coverage)
+
+    st.subheader(i18n.SECTION_TWO_TIER_RISK)
+    st.caption(i18n.TWO_TIER_CAPTION)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric(
+            i18n.LABEL_LINGUISTIC_ONLY_RISK,
+            f"{linguistic * 100:.0f} %" if linguistic is not None else i18n.EVIDENCE_UNSCORED,
+            help=i18n.TOOLTIP_LINGUISTIC_ONLY_RISK,
+        )
+    with col2:
+        st.metric(
+            i18n.LABEL_EVIDENCE_GROUNDED_RISK,
+            f"{evidence * 100:.0f} %" if evidence is not None else i18n.EVIDENCE_UNSCORED,
+            help=i18n.TOOLTIP_EVIDENCE_GROUNDED_RISK,
+        )
+    with col3:
+        st.metric(
+            i18n.LABEL_EVIDENCE_COVERAGE,
+            f"{coverage * 100:.0f} %",
+            help=i18n.TOOLTIP_EVIDENCE_COVERAGE,
+        )
+    with col4:
+        st.markdown(f"**{i18n.LABEL_OVERALL_CONFIDENCE}**", help=i18n.TOOLTIP_OVERALL_CONFIDENCE)
+        st.markdown(_confidence_badge_html(confidence), unsafe_allow_html=True)
+
+    if evidence is None:
+        st.info(i18n.NO_EVIDENCE_GROUNDED_RISK, icon="ℹ️")
+
+    with st.expander(i18n.EXPANDER_TWO_TIER):
+        st.markdown(i18n.EXPANDER_TWO_TIER_TEXT)
+
+
+def _render_evidence_list(claims: list[dict], show_article_title: bool = False) -> None:
+    """Render the claim/evidence/verdict cards backing evidence_grounded_risk."""
+    st.subheader(i18n.SECTION_EVIDENCE)
+    st.caption(i18n.EVIDENCE_CAPTION)
+
+    if not claims:
+        st.info(i18n.EVIDENCE_NONE, icon="ℹ️")
+        return
+
+    for claim in claims:
+        verdict = claim.get("verdict", "not_enough_evidence")
+        colour = _VERDICT_COLOURS.get(verdict, "#888")
+        verdict_label = i18n.EVIDENCE_VERDICT_LABELS.get(verdict, verdict)
+        claim_text = claim.get("claim_text", "")
+        snippet = claim.get("evidence_snippet")
+        url = claim.get("evidence_url")
+        article_title = claim.get("article_title") if show_article_title else None
+
+        header = f"<strong>{claim_text}</strong>"
+        if article_title:
+            header += f"<br><span style='font-size:0.78em;color:#888'>{i18n.LABEL_ARTICLES.rstrip('s')}: {_truncate(article_title, 70)}</span>"
+
+        evidence_line = ""
+        if snippet:
+            evidence_line = f"<div style='margin-top:6px;font-size:0.85em;color:#ccc'>{_truncate(snippet, 220)}</div>"
+        source_line = (
+            f"<div style='margin-top:4px;font-size:0.78em'>"
+            f"<a href='{url}' target='_blank'>{i18n.EVIDENCE_SOURCE_LABEL}</a></div>"
+            if url
+            else f"<div style='margin-top:4px;font-size:0.78em;color:#888'>{i18n.EVIDENCE_NO_SOURCE}</div>"
+        )
+
+        st.markdown(
+            f"""<div style='border-left:4px solid {colour};padding:10px 16px;
+            margin-bottom:8px;background:#000;border-radius:0 6px 6px 0'>
+              <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>
+                <span style='background:{colour};color:#000;padding:1px 8px;border-radius:4px;
+                font-size:0.75em;font-weight:bold'>{verdict_label}</span>
+              </div>
+              <div style='margin-top:6px'>{header}</div>
+              {evidence_line}
+              {source_line}
+            </div>""",
+            unsafe_allow_html=True,
+        )
 
 
 # ── demo mode ─────────────────────────────────────────────────────────────────
@@ -563,6 +725,9 @@ def render_topic(topic_id: int, db_path: str) -> None:
         st.info(i18n.TOPIC_NOT_SCORED)
         return
 
+    _render_two_tier_score(row)
+    st.markdown("---")
+
     _render_score_breakdown(row)
     st.markdown("---")
 
@@ -571,6 +736,10 @@ def render_topic(topic_id: int, db_path: str) -> None:
         _render_radar(row)
     with col_domain:
         _render_domain_trust_bar(db_path, topic_id)
+
+    st.markdown("---")
+    claims = load_topic_claims(db_path, topic_id)
+    _render_evidence_list(claims, show_article_title=True)
 
     st.markdown("---")
     st.subheader(i18n.SECTION_ARTICLES)
@@ -983,6 +1152,10 @@ def render_article(item_id: str, db_path: str) -> None:
     _render_gauge(col2, i18n.GAUGE_ATTRIBUTION, attr_score)
     _render_gauge(col3, i18n.GAUGE_CLICKBAIT, click_score)
     _render_gauge(col4, i18n.GAUGE_CAPS, caps_score)
+
+    st.markdown("---")
+    article_claims = load_article_claims(db_path, item_id)
+    _render_evidence_list(article_claims, show_article_title=False)
 
 
 def _render_gauge(container, title: str, value: float) -> None:

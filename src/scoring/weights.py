@@ -16,8 +16,9 @@ ARTICLE_RISK_WEIGHTS: dict[str, float] = {
     "attribution_vagueness": 0.25,
 }
 
-# composite_risk = sum(COMPOSITE_RISK_WEIGHTS[k] * signal[k]), per-topic score
-# stored in topic_scores.composite_risk. See src/scoring/compute_scores.py.
+# linguistic_only_risk = sum(COMPOSITE_RISK_WEIGHTS[k] * signal[k]), per-topic
+# score stored in topic_scores.linguistic_only_risk (Fase 7: the always-on
+# signal, evidence-independent). See src/scoring/compute_scores.py.
 #
 # fact_inconsistency (Fase 4): kept at 0.35 despite the metric itself being
 # redefined from Jaccard entity-overlap to NLI contradiction proportion (see
@@ -40,6 +41,35 @@ WEIGHT_GROUPS: dict[str, dict[str, float]] = {
     "ARTICLE_RISK_WEIGHTS": ARTICLE_RISK_WEIGHTS,
     "COMPOSITE_RISK_WEIGHTS": COMPOSITE_RISK_WEIGHTS,
 }
+
+# --- Fase 7: two-tier score --------------------------------------------------
+#
+# topic_scores now exposes two independent risk numbers instead of blending
+# everything into one:
+#   linguistic_only_risk   — the formula above (COMPOSITE_RISK_WEIGHTS),
+#                             always computable once run_nlp has scored a topic.
+#   evidence_grounded_risk — fraction of RAG-verified claims (Fase 5,
+#                             claim_verifications) that were "refuted" among
+#                             all claims with a definite verdict (supported ∪
+#                             refuted — excludes not_enough_evidence). NULL
+#                             when the topic has zero claims with a verdict.
+#
+# EVIDENCE_COVERAGE_THRESHOLD is the explicit, documented combination rule for
+# topic_scores.composite_risk — the single number used for dashboard sorting
+# and the misinformation-flag banner (see compute_scores.py::compute_overall_risk):
+#   composite_risk = evidence_grounded_risk  if evidence_coverage > threshold
+#                   = linguistic_only_risk    otherwise
+# Below the threshold, too few claims have a definite verdict for the
+# evidence-grounded number to be more trustworthy than the linguistic signal.
+EVIDENCE_COVERAGE_THRESHOLD: float = 0.30
+
+# overall_confidence bands (topic_scores.overall_confidence: 'high'/'medium'/'low').
+# Derived in compute_scores.py::compute_overall_confidence as the average of:
+#   - evidence_coverage itself (more claims with a definite verdict → more grounded)
+#   - the topic's mean source_reliability.resolve_reliability() confidence
+#     (Fase 6) across its article domains
+CONFIDENCE_BAND_HIGH: float = 0.65
+CONFIDENCE_BAND_MEDIUM: float = 0.35
 
 
 def validate_weight_groups() -> None:

@@ -23,7 +23,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from src.scoring.compute_scores import _MISINFO_THRESHOLD  # noqa: E402
-from src.scoring.weights import ARTICLE_RISK_WEIGHTS, COMPOSITE_RISK_WEIGHTS  # noqa: E402
+from src.scoring.weights import (  # noqa: E402
+    ARTICLE_RISK_WEIGHTS,
+    COMPOSITE_RISK_WEIGHTS,
+    CONFIDENCE_BAND_HIGH,
+    CONFIDENCE_BAND_MEDIUM,
+    EVIDENCE_COVERAGE_THRESHOLD,
+)
 
 _START_MARKER = "<!-- AUTO-GENERATED: scoring formulas, do not edit by hand -->"
 _END_MARKER = "<!-- END AUTO-GENERATED: scoring formulas -->"
@@ -48,13 +54,19 @@ def _format_formula(prefix: str, weights: dict[str, float]) -> str:
 def render_section() -> str:
     """Build the full marker-delimited "Scoring formulas" section."""
     article_formula = _format_formula("article_risk", ARTICLE_RISK_WEIGHTS)
-    composite_formula = _format_formula("composite_risk", COMPOSITE_RISK_WEIGHTS)
+    linguistic_formula = _format_formula("linguistic_only_risk", COMPOSITE_RISK_WEIGHTS)
     threshold_pct = round(_MISINFO_THRESHOLD * 100)
+    coverage_pct = round(EVIDENCE_COVERAGE_THRESHOLD * 100)
+    conf_high_pct = round(CONFIDENCE_BAND_HIGH * 100)
+    conf_med_pct = round(CONFIDENCE_BAND_MEDIUM * 100)
 
     return "\n".join(
         [
             _START_MARKER,
             "## Scoring formulas",
+            "",
+            "Topics are scored on **two independent tiers** (Fase 7) instead of one "
+            "blended number:",
             "",
             "**Article risk** (`article_scorer.py`) — per-article score stored in "
             "`raw_items.article_risk_score`:",
@@ -62,18 +74,41 @@ def render_section() -> str:
             article_formula,
             "```",
             "",
-            "**Composite risk** (`compute_scores.py`) — per-topic score stored in "
-            "`topic_scores.composite_risk`:",
+            "**Linguistic-only risk** (`compute_scores.py`) — always computable "
+            "once `run_nlp` has scored a topic; stored in "
+            "`topic_scores.linguistic_only_risk`:",
             "```",
-            composite_formula,
+            linguistic_formula,
+            "```",
+            "",
+            "**Evidence-grounded risk** (`compute_scores.py::compute_evidence_signals`) "
+            "— fraction of RAG-verified claims (Fase 5, `claim_verifications`) that were "
+            "`refuted` among claims with a definite verdict (`supported` ∪ `refuted`, "
+            "excluding `not_enough_evidence`). Stored in "
+            "`topic_scores.evidence_grounded_risk` (`NULL` when no claim has a definite "
+            "verdict). `topic_scores.evidence_coverage` is the fraction of checked claims "
+            "that had a definite verdict.",
+            "",
+            "**Combined score** (`compute_scores.py::compute_overall_risk`) — the single "
+            "sortable/flaggable number stored in `topic_scores.composite_risk`:",
+            "```",
+            f"composite_risk = evidence_grounded_risk  if evidence_coverage > {EVIDENCE_COVERAGE_THRESHOLD:.2f} ({coverage_pct} %)",
+            "                = linguistic_only_risk    otherwise",
             "```",
             "",
             f"`composite_risk` > {_MISINFO_THRESHOLD:.2f} ({threshold_pct} %) is the "
             "misinformation flag threshold (`_MISINFO_THRESHOLD`).",
             "",
-            "Weights are defined once in `src/scoring/weights.py` and this section is "
-            "generated from that file by `scripts/render_docs.py` — do not hand-edit the "
-            "numbers above.",
+            "**Overall confidence** (`compute_scores.py::compute_overall_confidence`) — "
+            "`topic_scores.overall_confidence` (`'high'` / `'medium'` / `'low'`), the "
+            "average of `evidence_coverage` and the topic's mean Fase 6 "
+            "`source_reliability.resolve_reliability()` confidence across its article "
+            f"domains: ≥ {CONFIDENCE_BAND_HIGH:.2f} ({conf_high_pct} %) → high, "
+            f"≥ {CONFIDENCE_BAND_MEDIUM:.2f} ({conf_med_pct} %) → medium, else low.",
+            "",
+            "Weights and thresholds are defined once in `src/scoring/weights.py` and this "
+            "section is generated from that file by `scripts/render_docs.py` — do not "
+            "hand-edit the numbers above.",
             _END_MARKER,
         ]
     )

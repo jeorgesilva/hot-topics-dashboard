@@ -278,6 +278,82 @@ Trust scores are resolved in this order:
 Thresholds: 🟢 ≥ 60 credible · 🟠 40–59 neutral · 🔴 < 40 unreliable
 """
 
+# ── two-tier risk (Fase 7) ────────────────────────────────────────────────────
+SECTION_TWO_TIER_RISK = "Two-Tier Risk Assessment"
+TWO_TIER_CAPTION = (
+    "Risk is assessed on two independent tiers instead of one blended number."
+)
+
+LABEL_LINGUISTIC_ONLY_RISK = "Linguistic-Only Risk"
+LABEL_EVIDENCE_GROUNDED_RISK = "Evidence-Grounded Risk"
+LABEL_EVIDENCE_COVERAGE = "Evidence Coverage"
+LABEL_OVERALL_CONFIDENCE = "Confidence"
+
+TOOLTIP_LINGUISTIC_ONLY_RISK = (
+    "Always-available risk signal: sensationalism, vague attribution, framing "
+    "divergence, and NLI-detected fact inconsistency across the topic's articles. "
+    "Does not depend on any claim having been fact-checked."
+)
+TOOLTIP_EVIDENCE_GROUNDED_RISK = (
+    "Share of automatically fact-checked claims (via NLI against retrieved "
+    "evidence) that were refuted, among claims with a definite verdict. "
+    "Shown as '—' when no claim in this topic has a definite verdict yet."
+)
+TOOLTIP_EVIDENCE_COVERAGE = (
+    "Fraction of checked claims that received a definite verdict (supported or "
+    "refuted), rather than 'not enough evidence'. Low coverage means the "
+    "evidence-grounded number rests on very little verified data."
+)
+TOOLTIP_OVERALL_CONFIDENCE = (
+    "How much to trust this topic's risk numbers overall — combines evidence "
+    "coverage with how well-established the topic's source domains are."
+)
+
+CONFIDENCE_LABELS: dict[str, str] = {
+    "high": "🟢 High",
+    "medium": "🟠 Medium",
+    "low": "🔴 Low",
+}
+
+EVIDENCE_UNSCORED = "—"
+NO_EVIDENCE_GROUNDED_RISK = (
+    "No claim in this topic has a definite verdict yet — risk assessment "
+    "currently relies on linguistic signals only."
+)
+
+SECTION_EVIDENCE = "Verified Claims"
+EVIDENCE_CAPTION = (
+    "Claims automatically extracted from articles and checked against "
+    "retrieved evidence (fact-check databases, Wikidata, or other articles "
+    "in this topic)."
+)
+EVIDENCE_NONE = (
+    "No claims could be automatically extracted or verified here."
+)
+EVIDENCE_VERDICT_LABELS: dict[str, str] = {
+    "supported": "✅ Supported",
+    "refuted": "❌ Refuted",
+    "not_enough_evidence": "❔ Not enough evidence",
+}
+EVIDENCE_SOURCE_LABEL = "Source"
+EVIDENCE_NO_SOURCE = "no source URL available"
+
+EXPANDER_TWO_TIER = "ℹ️ How does the two-tier risk model work?"
+EXPANDER_TWO_TIER_TEXT = """\
+Instead of blending everything into one opaque number, each topic gets **two independent risk scores**:
+
+| Tier | Always available? | What it measures |
+|---|---|---|
+| 🗣️ Linguistic-Only Risk | ✅ Yes | Sensationalism, vague attribution, framing divergence, NLI fact inconsistency |
+| 🔎 Evidence-Grounded Risk | Only with verified claims | Share of automatically fact-checked claims that were refuted |
+
+**Evidence Coverage** shows how much of the evidence-grounded number rests on claims with a definite verdict (as opposed to "not enough evidence").
+
+**Which number is used to rank/flag a topic?** If evidence coverage is high enough to trust it, the evidence-grounded risk is used; otherwise the linguistic-only risk is used as a fallback. See the "Verified Claims" section below for the actual claim, evidence snippet, and source URL behind the evidence-grounded number.
+
+**Confidence** combines evidence coverage with how well-established the topic's source domains are, so you can tell "known-average risk" apart from "not enough signal to say".
+"""
+
 EXPANDER_RADAR = "ℹ️ What does the Risk Radar show?"
 EXPANDER_RADAR_TEXT = """\
 The radar chart visualises 4 risk signals simultaneously:
